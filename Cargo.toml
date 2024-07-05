@@ -1,5 +1,5 @@
 [package]
-authers = ["Shirotha"]
+authors = ["Shirotha"]
 name = "nu_plugin_schema"
 version = "0.1.0"
 edition = "2021"
@@ -7,6 +7,9 @@ edition = "2021"
 [dependencies]
 nu-plugin = "0.95.0"
 nu-protocol = "0.95.0"
+serde = "1.0.203"
+thiserror = "1.0.61"
+typetag = "0.2.16"
 
 [profile.release]
 opt-level = 3
@@ -17,6 +20,9 @@ strip = "debuginfo"
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.test]
+incremental = true
 
 [dev-dependencies]
 nu-plugin-test-support = "0.95.0"

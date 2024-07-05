@@ -1024,6 +1024,9 @@ dependencies = [
  "nu-plugin",
  "nu-plugin-test-support",
  "nu-protocol",
+ "serde",
+ "thiserror",
+ "typetag",
 ]
 
 [[package]]
