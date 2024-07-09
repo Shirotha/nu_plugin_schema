@@ -265,8 +265,9 @@ impl Schema {
     ) -> Result<Value, SchemaError> {
         let inner = schemas.as_ref().item;
         if inner.is_empty() {
-            return Err(SchemaError::Schema {
-                span: schemas.span,
+            return Err(SchemaError::Value {
+                schema_span: schemas.span,
+                value_span: value.span(),
                 msg: "empty any".to_string(),
             });
         }
@@ -846,6 +847,12 @@ mod test {
             Some(Some(Value::test_int(1))),
             "fallback",
         )?;
+        assert_schema(
+            schema_any(vec![]),
+            Value::test_nothing(),
+            Some(None),
+            "empty any",
+        )?;
         Ok(())
     }
     #[test]
@@ -862,6 +869,7 @@ mod test {
             "partial match",
         )?;
         assert_schema(schema, Value::test_nothing(), Some(None), "no match")?;
+        assert_schema(schema_all(vec![]), Value::test_nothing(), None, "empty all")?;
         Ok(())
     }
     #[test]
