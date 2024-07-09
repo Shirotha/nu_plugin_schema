@@ -62,8 +62,8 @@ pub enum Schema {
     },
     /// Describes a homogeneous list
     Array {
-        /// Inner schema, multiple will get repeated
-        items: Spanned<Box<[Schema]>>,
+        /// Inner schema
+        items: Spanned<Box<Schema>>,
         /// Length restriction
         length: Spanned<IntRange>,
         /// Allow wrapping single non-list, non-null value into 1-length list
@@ -162,10 +162,7 @@ impl CustomValue for Schema {
                     span: s,
                 } => record!(
                     "list" => Value::string("array".to_string(), Span::unknown()),
-                    "items" => items.as_ref().item.iter()
-                        .map(|s| s.to_base_value(Span::unknown()))
-                        .collect::<Result<Vec<Value>, _>>()?
-                        .into_value(items.span),
+                    "items" => items.as_ref().item.clone().to_base_value(items.span)?,
                     "length" => Value::range(Range::IntRange(length.item.clone()), length.span),
                     "wrap_single" => Value::bool(wrap_single.item, wrap_single.span),
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
@@ -334,7 +331,10 @@ impl Schema {
             }
             value if inner.len() == 1 => {
                 if wrap_single.item {
-                    inner[0].apply(engine, value)
+                    inner[0].apply(engine, value).map(|value| {
+                        let span = value.span();
+                        Value::list(vec![value], span)
+                    })
                 } else {
                     Err(SchemaError::Value {
                         schema_span: span_fallback(wrap_single.span, span),
@@ -353,7 +353,7 @@ impl Schema {
     #[inline]
     pub fn apply_array(
         engine: Option<&EngineInterface>,
-        items: &Spanned<Box<[Schema]>>,
+        items: &Spanned<Box<Schema>>,
         length: &Spanned<IntRange>,
         wrap_single: &Spanned<bool>,
         wrap_null: &Spanned<bool>,
@@ -361,15 +361,7 @@ impl Schema {
         value: Value,
     ) -> Result<Value, SchemaError> {
         let inner = items.as_ref().item;
-        if inner.is_empty() {
-            return Err(SchemaError::Schema {
-                span: span_fallback(items.span, span),
-                msg: "array needs at least one schema".to_string(),
-            });
-        }
         let len = length.as_ref().item;
-        // TODO: find a way to not have to clone value
-        let cloned = value.clone();
         match value {
             Value::List {
                 vals,
@@ -382,16 +374,10 @@ impl Schema {
                         msg: "array length mismatch".to_string(),
                     });
                 }
-                if let Some(error) = inner
-                    .iter()
-                    .cycle()
-                    .zip(vals)
-                    .find_map(|(s, v)| s.apply(engine, v).err())
-                {
-                    Err(error)
-                } else {
-                    Ok(cloned)
-                }
+                vals.into_iter()
+                    .map(|v| inner.apply(engine, v))
+                    .collect::<Result<Vec<Value>, _>>()
+                    .map(|vals| Value::list(vals, internal_span))
             }
             Value::Nothing { internal_span } if len.contains(0) => {
                 if wrap_null.item {
@@ -406,8 +392,10 @@ impl Schema {
             }
             value if len.contains(1) => {
                 if wrap_single.item {
-                    // SAFETY: unwrap: items can't be empty
-                    inner[0].apply(engine, value)
+                    inner.apply(engine, value).map(|value| {
+                        let span = value.span();
+                        Value::list(vec![value], span)
+                    })
                 } else {
                     Err(SchemaError::Value {
                         schema_span: span_fallback(wrap_single.span, span),
@@ -439,7 +427,15 @@ impl Schema {
                 msg: "non-record value".to_string(),
             });
         };
-        for (field, schema) in fields.as_ref().item.iter() {
+        let inner = fields.as_ref().item;
+        if record.len() > inner.len() {
+            return Err(SchemaError::Value {
+                schema_span: fields.span,
+                value_span,
+                msg: "too many fields".to_string(),
+            });
+        }
+        for (field, schema) in inner.iter() {
             // TODO: do this without having to clone all values
             let value = if let Some(value) = record.get(field) {
                 value.clone()
@@ -654,6 +650,17 @@ mod test {
         assert_eq!(schema.apply(None, r#in).ok(), out)
     }
 
+    fn make_range(start: i64, next: i64, end: Option<i64>) -> IntRange {
+        IntRange::new(
+            Value::test_int(start),
+            Value::test_int(next),
+            end.map_or(Value::test_nothing(), |end| Value::test_int(end)),
+            nu_protocol::ast::RangeInclusion::Inclusive,
+            Span::test_data(),
+        )
+        .unwrap()
+    }
+
     fn schema_type(r#type: Type) -> Schema {
         Schema::Type(r#type.into_spanned(Span::test_data()))
     }
@@ -662,6 +669,63 @@ mod test {
     }
     fn schema_fallback(default: Value) -> Schema {
         Schema::Fallback(default)
+    }
+    fn schema_any(options: Vec<Schema>) -> Schema {
+        Schema::Any(options.into_boxed_slice().into_spanned(Span::test_data()))
+    }
+    fn schema_all(options: Vec<Schema>) -> Schema {
+        Schema::All(options.into_boxed_slice().into_spanned(Span::test_data()))
+    }
+    fn schema_tuple(elements: Vec<Schema>, wrap_single: bool, wrap_null: bool) -> Schema {
+        Schema::Tuple {
+            items: elements.into_boxed_slice().into_spanned(Span::test_data()),
+            wrap_single: wrap_single.into_spanned(Span::test_data()),
+            wrap_null: wrap_null.into_spanned(Span::test_data()),
+            span: Span::test_data(),
+        }
+    }
+    fn schema_array(
+        elements: Schema,
+        length: Option<IntRange>,
+        wrap_single: bool,
+        wrap_null: bool,
+    ) -> Schema {
+        Schema::Array {
+            items: Box::new(elements).into_spanned(Span::test_data()),
+            length: length
+                .unwrap_or(make_range(0, 1, None))
+                .into_spanned(Span::test_data()),
+            wrap_single: wrap_single.into_spanned(Span::test_data()),
+            wrap_null: wrap_null.into_spanned(Span::test_data()),
+            span: Span::test_data(),
+        }
+    }
+    fn schema_struct(fields: Vec<(&'static str, Schema)>, wrap_missing: bool) -> Schema {
+        Schema::Struct {
+            fields: fields
+                .into_iter()
+                .map(|(field, schema)| (field.to_string(), schema))
+                .collect::<Box<[_]>>()
+                .into_spanned(Span::test_data()),
+            wrap_missing: wrap_missing.into_spanned(Span::test_data()),
+            span: Span::test_data(),
+        }
+    }
+    fn schema_map(
+        keys: Option<Schema>,
+        values: Option<Schema>,
+        length: Option<IntRange>,
+        wrap_null: bool,
+    ) -> Schema {
+        Schema::Map {
+            keys: keys.map(|s| Box::new(s).into_spanned(Span::test_data())),
+            values: values.map(|s| Box::new(s).into_spanned(Span::test_data())),
+            length: length
+                .unwrap_or(make_range(0, 1, None))
+                .into_spanned(Span::test_data()),
+            wrap_null: wrap_null.into_spanned(Span::test_data()),
+            span: Span::test_data(),
+        }
     }
 
     #[test]
@@ -685,6 +749,173 @@ mod test {
             Some(Some(value)),
         );
     }
-
-    // TODO: test compund schema
+    #[test]
+    fn test_any() {
+        let schema_failable = schema_any(vec![schema_type(Type::Int), schema_type(Type::Float)]);
+        let schema_fallback = schema_any(vec![
+            schema_value(Value::test_int(0)),
+            schema_fallback(Value::test_int(1)),
+        ]);
+        assert_schema(schema_failable.clone(), Value::test_int(0), None);
+        assert_schema(schema_failable, Value::test_nothing(), Some(None));
+        assert_schema(schema_fallback.clone(), Value::test_int(0), None);
+        assert_schema(
+            schema_fallback,
+            Value::test_int(2),
+            Some(Some(Value::test_int(1))),
+        );
+    }
+    #[test]
+    fn test_all() {
+        let schema = schema_all(vec![
+            schema_type(Type::Int),
+            schema_value(Value::test_int(0)),
+        ]);
+        assert_schema(schema.clone(), Value::test_int(0), None);
+        assert_schema(schema.clone(), Value::test_int(1), Some(None));
+        assert_schema(schema, Value::test_nothing(), Some(None));
+    }
+    #[test]
+    fn test_tuple() {
+        let schema_basic = schema_tuple(
+            vec![schema_type(Type::Int), schema_type(Type::Int)],
+            false,
+            false,
+        );
+        let schema_single = schema_tuple(vec![schema_value(Value::test_int(0))], true, true);
+        let schema_empty = schema_tuple(vec![], true, true);
+        assert_schema(
+            schema_basic.clone(),
+            Value::test_list(vec![Value::test_int(0), Value::test_int(1)]),
+            None,
+        );
+        assert_schema(schema_basic.clone(), Value::test_list(vec![]), Some(None));
+        assert_schema(
+            schema_basic,
+            Value::test_list(vec![Value::test_nothing(), Value::test_nothing()]),
+            Some(None),
+        );
+        assert_schema(
+            schema_single.clone(),
+            Value::test_int(0),
+            Some(Some(Value::test_list(vec![Value::test_int(0)]))),
+        );
+        assert_schema(schema_single, Value::test_nothing(), Some(None));
+        assert_schema(schema_empty.clone(), Value::test_int(0), Some(None));
+        assert_schema(
+            schema_empty,
+            Value::test_nothing(),
+            Some(Some(Value::test_list(vec![]))),
+        );
+    }
+    #[test]
+    fn test_array() {
+        let schema_basic = schema_array(schema_type(Type::Int), None, true, true);
+        let schema_fixed = schema_array(
+            schema_type(Type::Int),
+            Some(make_range(2, 3, Some(2))),
+            true,
+            true,
+        );
+        let list_ = Value::test_list(vec![]);
+        let list_0 = Value::test_list(vec![Value::test_int(0)]);
+        let list_01 = Value::test_list(vec![Value::test_int(0), Value::test_int(1)]);
+        assert_schema(schema_basic.clone(), list_01.clone(), None);
+        assert_schema(
+            schema_basic.clone(),
+            Value::test_int(0),
+            Some(Some(list_0.clone())),
+        );
+        assert_schema(
+            schema_basic.clone(),
+            Value::test_nothing(),
+            Some(Some(list_.clone())),
+        );
+        assert_schema(schema_basic, Value::test_float(1.0), Some(None));
+        assert_schema(schema_fixed.clone(), list_0, Some(None));
+        assert_schema(schema_fixed, list_01, None);
+    }
+    #[test]
+    fn test_struct() {
+        let schema_strict = schema_struct(
+            vec![("x", schema_type(Type::Int)), ("y", schema_type(Type::Int))],
+            false,
+        );
+        let schema_open = schema_struct(
+            vec![
+                ("x", schema_type(Type::Int)),
+                ("y", schema_type(Type::Int)),
+                (
+                    "z",
+                    schema_any(vec![
+                        schema_all(vec![
+                            schema_type(Type::Nothing),
+                            schema_fallback(Value::test_int(0)),
+                        ]),
+                        schema_type(Type::Int),
+                    ]),
+                ),
+            ],
+            true,
+        );
+        let xy = Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_int(1)));
+        let xy_null =
+            Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_nothing()));
+        let xyz = Value::test_record(
+            record!("x" => Value::test_int(0), "y" => Value::test_int(1), "z" => Value::test_int(0)),
+        );
+        let xyz_null = Value::test_record(
+            record!("x" => Value::test_int(0), "y" => Value::test_int(1), "z" => Value::test_nothing()),
+        );
+        assert_schema(schema_strict.clone(), xy.clone(), None);
+        assert_schema(schema_strict.clone(), xy_null.clone(), Some(None));
+        assert_schema(schema_strict, xyz.clone(), Some(None));
+        assert_schema(schema_open.clone(), xyz.clone(), None);
+        assert_schema(schema_open.clone(), xy, Some(Some(xyz.clone())));
+        assert_schema(schema_open.clone(), xyz_null, Some(Some(xyz)));
+        assert_schema(schema_open, xy_null, Some(None));
+    }
+    #[test]
+    fn test_map() {
+        let schema_values = schema_map(None, Some(schema_type(Type::Int)), None, true);
+        let schema_keys = schema_map(
+            Some(schema_value(Value::test_string("x"))),
+            None,
+            None,
+            false,
+        );
+        let schema_fixed = schema_map(
+            Some(schema_any(vec![
+                schema_value(Value::test_string("x")),
+                schema_value(Value::test_string("y")),
+            ])),
+            Some(schema_type(Type::Int)),
+            Some(make_range(2, 3, Some(2))),
+            false,
+        );
+        let map_ = Value::test_record(record!());
+        let map_x = Value::test_record(record!("x" => Value::test_int(0)));
+        let map_xy =
+            Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_int(1)));
+        let map_xy_null =
+            Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_nothing()));
+        assert_schema(schema_values.clone(), map_.clone(), None);
+        assert_schema(schema_values.clone(), map_x.clone(), None);
+        assert_schema(schema_values.clone(), map_xy.clone(), None);
+        assert_schema(schema_values.clone(), map_xy_null.clone(), Some(None));
+        assert_schema(
+            schema_values,
+            Value::test_nothing(),
+            Some(Some(map_.clone())),
+        );
+        assert_schema(schema_keys.clone(), map_.clone(), None);
+        assert_schema(schema_keys.clone(), map_x.clone(), None);
+        assert_schema(schema_keys.clone(), map_xy.clone(), Some(None));
+        assert_schema(schema_keys.clone(), map_xy_null.clone(), Some(None));
+        assert_schema(schema_keys, Value::test_nothing(), Some(None));
+        assert_schema(schema_fixed.clone(), map_.clone(), Some(None));
+        assert_schema(schema_fixed.clone(), map_x.clone(), Some(None));
+        assert_schema(schema_fixed.clone(), map_xy.clone(), None);
+        assert_schema(schema_fixed, map_xy_null.clone(), Some(None));
+    }
 }
