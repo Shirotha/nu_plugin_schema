@@ -127,29 +127,29 @@ impl CustomValue for Schema {
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
         let result =
             match self {
-                Schema::Type(r#type) => {
+                Self::Type(r#type) => {
                     record!("type" => Value::string(r#type.item.to_string(), r#type.span))
                         .into_spanned(span_fallback(span, r#type.span))
                 }
-                Schema::Value(value) => record!("value" => value.clone())
+                Self::Value(value) => record!("value" => value.clone())
                     .into_spanned(span_fallback(span, value.span())),
-                Schema::Fallback(value) => record!("fallback" => value.clone())
+                Self::Fallback(value) => record!("fallback" => value.clone())
                     .into_spanned(span_fallback(span, value.span())),
-                Schema::Any(schemas) => record!(
+                Self::Any(schemas) => record!(
                     "any" => schemas.as_ref().item.iter()
                         .map(|s| s.to_base_value(Span::unknown()))
                         .collect::<Result<Vec<Value>, _>>()?
                         .into_value(schemas.span)
                 )
                 .into_spanned(span_fallback(span, schemas.span)),
-                Schema::All(schemas) => record!(
+                Self::All(schemas) => record!(
                     "all" => schemas.as_ref().item.iter()
                         .map(|s| s.to_base_value(Span::unknown()))
                         .collect::<Result<Vec<Value>, _>>()?
                         .into_value(schemas.span)
                 )
                 .into_spanned(span_fallback(span, schemas.span)),
-                Schema::Tuple {
+                Self::Tuple {
                     items,
                     wrap_single,
                     wrap_null,
@@ -164,7 +164,7 @@ impl CustomValue for Schema {
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                 )
                 .into_spanned(span_fallback(span, *s)),
-                Schema::Array {
+                Self::Array {
                     items,
                     length,
                     wrap_single,
@@ -178,7 +178,7 @@ impl CustomValue for Schema {
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                 )
                 .into_spanned(span_fallback(span, *s)),
-                Schema::Struct {
+                Self::Struct {
                     fields,
                     wrap_missing,
                     span: s,
@@ -194,7 +194,7 @@ impl CustomValue for Schema {
                     )
                     .into_spanned(span_fallback(span, *s))
                 }
-                Schema::Map {
+                Self::Map {
                     keys,
                     values,
                     length,
@@ -214,7 +214,7 @@ impl CustomValue for Schema {
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                 )
                 .into_spanned(span_fallback(span, *s)),
-                Schema::Custom(closure) => record!(
+                Self::Custom(closure) => record!(
                     "custom" => Value::closure(closure.item.clone(), closure.span),
                 )
                 .into_spanned(span_fallback(span, closure.span)),
@@ -613,37 +613,37 @@ impl Schema {
         value: Value,
     ) -> Result<Value, SchemaError> {
         match self {
-            Schema::Type(r#type) => Self::apply_type(r#type, value),
-            Schema::Value(test_value) => Self::apply_value(test_value, value),
-            Schema::Fallback(default) => Self::apply_fallback(default, value),
-            Schema::Any(schemas) => Self::apply_any(engine, schemas, value),
-            Schema::All(schemas) => Self::apply_all(engine, schemas, value),
-            Schema::Tuple {
+            Self::Type(r#type) => Self::apply_type(r#type, value),
+            Self::Value(test_value) => Self::apply_value(test_value, value),
+            Self::Fallback(default) => Self::apply_fallback(default, value),
+            Self::Any(schemas) => Self::apply_any(engine, schemas, value),
+            Self::All(schemas) => Self::apply_all(engine, schemas, value),
+            Self::Tuple {
                 items,
                 wrap_single,
                 wrap_null,
                 span,
             } => Self::apply_tuple(engine, items, wrap_single, wrap_null, *span, value),
-            Schema::Array {
+            Self::Array {
                 items,
                 length,
                 wrap_single,
                 wrap_null,
                 span,
             } => Self::apply_array(engine, items, length, wrap_single, wrap_null, *span, value),
-            Schema::Struct {
+            Self::Struct {
                 fields,
                 wrap_missing,
                 span,
             } => Self::apply_struct(engine, fields, wrap_missing, *span, value),
-            Schema::Map {
+            Self::Map {
                 keys,
                 values,
                 length,
                 wrap_null,
                 span,
             } => Self::apply_map(engine, keys, values, length, wrap_null, *span, value),
-            Schema::Custom(closure) => Self::apply_custom(engine, closure, value),
+            Self::Custom(closure) => Self::apply_custom(engine, closure, value),
         }
     }
 }
