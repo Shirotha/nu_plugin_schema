@@ -36,6 +36,16 @@ pub enum SchemaError {
     #[error(transparent)]
     Shell(#[from] ShellError),
 }
+impl SchemaError {
+    pub fn message(&self) -> String {
+        match self {
+            Self::Schema { msg, .. } => format!("Schema Error: {}", msg),
+            Self::Value { msg, .. } => format!("Value Error: {}", msg),
+            Self::Custom { error, .. } => format!("Custom Closure Error: {}", error),
+            Self::Shell(error) => format!("Internal Error: {}", error),
+        }
+    }
+}
 
 // TODO: carry span from original user input around
 /// Representation of a schema that can be applied to a [`Value`].
@@ -641,13 +651,41 @@ impl Schema {
 mod test {
     use super::*;
 
-    fn assert_schema(schema: Schema, r#in: Value, out: Option<Option<Value>>) {
+    fn assert_schema(
+        schema: Schema,
+        r#in: Value,
+        out: Option<Option<Value>>,
+        msg: &'static str,
+    ) -> Result<(), String> {
         let out = if let Some(out) = out {
             out
         } else {
             Some(r#in.clone())
         };
-        assert_eq!(schema.apply(None, r#in).ok(), out)
+        let value = schema.apply(None, r#in);
+        if let Some(out) = out {
+            match value {
+                Ok(value) if value == out => Ok(()),
+                Ok(value) => {
+                    println!("Wrong value returned");
+                    println!("  Expected: {:?}", out);
+                    println!("  Got: {:?}", value);
+                    Err(format!("failed assertion: {}", msg))
+                }
+                Err(error) => {
+                    println!("Unexpected Error: {}", error.message());
+                    Err(format!("failed assertion: {}", msg))
+                }
+            }
+        } else {
+            if let Ok(value) = value {
+                println!("Expected Error");
+                println!("Got Value: {:?}", value);
+                Err(format!("failed assertion: {}", msg))
+            } else {
+                Ok(())
+            }
+        }
     }
 
     fn make_range(start: i64, next: i64, end: Option<i64>) -> IntRange {
@@ -729,54 +767,105 @@ mod test {
     }
 
     #[test]
-    fn test_type() {
-        assert_schema(schema_type(Type::Int), Value::test_int(42), None);
-        assert_schema(schema_type(Type::String), Value::test_int(42), Some(None));
+    fn test_type() -> Result<(), String> {
+        assert_schema(
+            schema_type(Type::Int),
+            Value::test_int(42),
+            None,
+            "matching value",
+        )?;
+        assert_schema(
+            schema_type(Type::String),
+            Value::test_int(42),
+            Some(None),
+            "wrong value",
+        )?;
+        Ok(())
     }
     #[test]
-    fn test_value() {
+    fn test_value() -> Result<(), String> {
         let value = Value::test_int(42);
-        assert_schema(schema_value(value.clone()), value.clone(), None);
-        assert_schema(schema_value(Value::test_int(43)), value.clone(), Some(None));
-        assert_schema(schema_value(Value::test_float(1.0)), value, Some(None));
+        assert_schema(
+            schema_value(value.clone()),
+            value.clone(),
+            None,
+            "matching value",
+        )?;
+        assert_schema(
+            schema_value(Value::test_int(43)),
+            value.clone(),
+            Some(None),
+            "wrong value",
+        )?;
+        assert_schema(
+            schema_value(Value::test_float(1.0)),
+            value,
+            Some(None),
+            "wrong type",
+        )?;
+        Ok(())
     }
     #[test]
-    fn test_fallback() {
+    fn test_fallback() -> Result<(), String> {
         let value = Value::test_int(42);
         assert_schema(
             schema_fallback(value.clone()),
             Value::test_nothing(),
             Some(Some(value)),
-        );
+            "fallback",
+        )
     }
     #[test]
-    fn test_any() {
+    fn test_any() -> Result<(), String> {
         let schema_failable = schema_any(vec![schema_type(Type::Int), schema_type(Type::Float)]);
         let schema_fallback = schema_any(vec![
             schema_value(Value::test_int(0)),
             schema_fallback(Value::test_int(1)),
         ]);
-        assert_schema(schema_failable.clone(), Value::test_int(0), None);
-        assert_schema(schema_failable, Value::test_nothing(), Some(None));
-        assert_schema(schema_fallback.clone(), Value::test_int(0), None);
+        assert_schema(
+            schema_failable.clone(),
+            Value::test_int(0),
+            None,
+            "matching branch",
+        )?;
+        assert_schema(
+            schema_failable,
+            Value::test_nothing(),
+            Some(None),
+            "no matching branch",
+        )?;
+        assert_schema(
+            schema_fallback.clone(),
+            Value::test_int(0),
+            None,
+            "branch before fallback",
+        )?;
         assert_schema(
             schema_fallback,
             Value::test_int(2),
             Some(Some(Value::test_int(1))),
-        );
+            "fallback",
+        )?;
+        Ok(())
     }
     #[test]
-    fn test_all() {
+    fn test_all() -> Result<(), String> {
         let schema = schema_all(vec![
             schema_type(Type::Int),
             schema_value(Value::test_int(0)),
         ]);
-        assert_schema(schema.clone(), Value::test_int(0), None);
-        assert_schema(schema.clone(), Value::test_int(1), Some(None));
-        assert_schema(schema, Value::test_nothing(), Some(None));
+        assert_schema(schema.clone(), Value::test_int(0), None, "matching value")?;
+        assert_schema(
+            schema.clone(),
+            Value::test_int(1),
+            Some(None),
+            "partial match",
+        )?;
+        assert_schema(schema, Value::test_nothing(), Some(None), "no match")?;
+        Ok(())
     }
     #[test]
-    fn test_tuple() {
+    fn test_tuple() -> Result<(), String> {
         let schema_basic = schema_tuple(
             vec![schema_type(Type::Int), schema_type(Type::Int)],
             false,
@@ -788,28 +877,48 @@ mod test {
             schema_basic.clone(),
             Value::test_list(vec![Value::test_int(0), Value::test_int(1)]),
             None,
-        );
-        assert_schema(schema_basic.clone(), Value::test_list(vec![]), Some(None));
+            "matching value",
+        )?;
+        assert_schema(
+            schema_basic.clone(),
+            Value::test_list(vec![]),
+            Some(None),
+            "too short",
+        )?;
         assert_schema(
             schema_basic,
             Value::test_list(vec![Value::test_nothing(), Value::test_nothing()]),
             Some(None),
-        );
+            "wrong types",
+        )?;
         assert_schema(
             schema_single.clone(),
             Value::test_int(0),
             Some(Some(Value::test_list(vec![Value::test_int(0)]))),
-        );
-        assert_schema(schema_single, Value::test_nothing(), Some(None));
-        assert_schema(schema_empty.clone(), Value::test_int(0), Some(None));
+            "wrap single",
+        )?;
+        assert_schema(
+            schema_single,
+            Value::test_nothing(),
+            Some(None),
+            "null as single",
+        )?;
+        assert_schema(
+            schema_empty.clone(),
+            Value::test_int(0),
+            Some(None),
+            "too long",
+        )?;
         assert_schema(
             schema_empty,
             Value::test_nothing(),
             Some(Some(Value::test_list(vec![]))),
-        );
+            "wrap null",
+        )?;
+        Ok(())
     }
     #[test]
-    fn test_array() {
+    fn test_array() -> Result<(), String> {
         let schema_basic = schema_array(schema_type(Type::Int), None, true, true);
         let schema_fixed = schema_array(
             schema_type(Type::Int),
@@ -820,23 +929,36 @@ mod test {
         let list_ = Value::test_list(vec![]);
         let list_0 = Value::test_list(vec![Value::test_int(0)]);
         let list_01 = Value::test_list(vec![Value::test_int(0), Value::test_int(1)]);
-        assert_schema(schema_basic.clone(), list_01.clone(), None);
+        assert_schema(
+            schema_basic.clone(),
+            list_01.clone(),
+            None,
+            "matching value",
+        )?;
         assert_schema(
             schema_basic.clone(),
             Value::test_int(0),
             Some(Some(list_0.clone())),
-        );
+            "wrap single",
+        )?;
         assert_schema(
             schema_basic.clone(),
             Value::test_nothing(),
             Some(Some(list_.clone())),
-        );
-        assert_schema(schema_basic, Value::test_float(1.0), Some(None));
-        assert_schema(schema_fixed.clone(), list_0, Some(None));
-        assert_schema(schema_fixed, list_01, None);
+            "wrap null",
+        )?;
+        assert_schema(
+            schema_basic,
+            Value::test_float(1.0),
+            Some(None),
+            "wrong type",
+        )?;
+        assert_schema(schema_fixed.clone(), list_0, Some(None), "too short")?;
+        assert_schema(schema_fixed, list_01, None, "matching length")?;
+        Ok(())
     }
     #[test]
-    fn test_struct() {
+    fn test_struct() -> Result<(), String> {
         let schema_strict = schema_struct(
             vec![("x", schema_type(Type::Int)), ("y", schema_type(Type::Int))],
             false,
@@ -867,16 +989,31 @@ mod test {
         let xyz_null = Value::test_record(
             record!("x" => Value::test_int(0), "y" => Value::test_int(1), "z" => Value::test_nothing()),
         );
-        assert_schema(schema_strict.clone(), xy.clone(), None);
-        assert_schema(schema_strict.clone(), xy_null.clone(), Some(None));
-        assert_schema(schema_strict, xyz.clone(), Some(None));
-        assert_schema(schema_open.clone(), xyz.clone(), None);
-        assert_schema(schema_open.clone(), xy, Some(Some(xyz.clone())));
-        assert_schema(schema_open.clone(), xyz_null, Some(Some(xyz)));
-        assert_schema(schema_open, xy_null, Some(None));
+        assert_schema(schema_strict.clone(), xy.clone(), None, "maching value")?;
+        assert_schema(
+            schema_strict.clone(),
+            xy_null.clone(),
+            Some(None),
+            "wrong type",
+        )?;
+        assert_schema(schema_strict, xyz.clone(), Some(None), "too many fields")?;
+        assert_schema(
+            schema_open.clone(),
+            xy,
+            Some(Some(xyz.clone())),
+            "default field",
+        )?;
+        assert_schema(
+            schema_open.clone(),
+            xyz_null,
+            Some(Some(xyz)),
+            "treat null like missing",
+        )?;
+        assert_schema(schema_open, xy_null, Some(None), "missing required field")?;
+        Ok(())
     }
     #[test]
-    fn test_map() {
+    fn test_map() -> Result<(), String> {
         let schema_values = schema_map(None, Some(schema_type(Type::Int)), None, true);
         let schema_keys = schema_map(
             Some(schema_value(Value::test_string("x"))),
@@ -899,23 +1036,42 @@ mod test {
             Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_int(1)));
         let map_xy_null =
             Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_nothing()));
-        assert_schema(schema_values.clone(), map_.clone(), None);
-        assert_schema(schema_values.clone(), map_x.clone(), None);
-        assert_schema(schema_values.clone(), map_xy.clone(), None);
-        assert_schema(schema_values.clone(), map_xy_null.clone(), Some(None));
+        assert_schema(schema_values.clone(), map_.clone(), None, "empty values")?;
+        assert_schema(
+            schema_values.clone(),
+            map_xy.clone(),
+            None,
+            "matching values",
+        )?;
+        assert_schema(
+            schema_values.clone(),
+            map_xy_null.clone(),
+            Some(None),
+            "wrong value",
+        )?;
         assert_schema(
             schema_values,
             Value::test_nothing(),
             Some(Some(map_.clone())),
-        );
-        assert_schema(schema_keys.clone(), map_.clone(), None);
-        assert_schema(schema_keys.clone(), map_x.clone(), None);
-        assert_schema(schema_keys.clone(), map_xy.clone(), Some(None));
-        assert_schema(schema_keys.clone(), map_xy_null.clone(), Some(None));
-        assert_schema(schema_keys, Value::test_nothing(), Some(None));
-        assert_schema(schema_fixed.clone(), map_.clone(), Some(None));
-        assert_schema(schema_fixed.clone(), map_x.clone(), Some(None));
-        assert_schema(schema_fixed.clone(), map_xy.clone(), None);
-        assert_schema(schema_fixed, map_xy_null.clone(), Some(None));
+            "wrap null",
+        )?;
+        assert_schema(schema_keys.clone(), map_.clone(), None, "empty keys")?;
+        assert_schema(schema_keys.clone(), map_x.clone(), None, "matching keys")?;
+        assert_schema(schema_keys.clone(), map_xy.clone(), Some(None), "wrong key")?;
+        assert_schema(
+            schema_keys,
+            Value::test_nothing(),
+            Some(None),
+            "disallow wrap null",
+        )?;
+        assert_schema(schema_fixed.clone(), map_x.clone(), Some(None), "too short")?;
+        assert_schema(
+            schema_fixed.clone(),
+            map_xy.clone(),
+            None,
+            "matching length",
+        )?;
+        assert_schema(schema_fixed, map_xy_null.clone(), Some(None), "too long")?;
+        Ok(())
     }
 }
