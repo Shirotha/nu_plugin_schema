@@ -47,7 +47,6 @@ impl SchemaError {
     }
 }
 
-// TODO: carry span from original user input around
 /// Representation of a schema that can be applied to a [`Value`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Schema {
@@ -305,8 +304,6 @@ impl Schema {
         value: Value,
     ) -> Result<Value, SchemaError> {
         let inner = items.as_ref().item;
-        // TODO: find a way to not have to clone value
-        let cloned = value.clone();
         match value {
             Value::List {
                 vals,
@@ -319,15 +316,12 @@ impl Schema {
                         msg: "tuple length mismatch".to_string(),
                     });
                 }
-                if let Some(error) = inner
+                inner
                     .iter()
                     .zip(vals)
-                    .find_map(|(s, v)| s.apply(engine, v).err())
-                {
-                    Err(error)
-                } else {
-                    Ok(cloned)
-                }
+                    .map(|(s, v)| s.apply(engine, v))
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|vals| Value::list(vals, internal_span))
             }
             Value::Nothing { internal_span } if inner.len() == 0 => {
                 if wrap_null.item {
@@ -569,7 +563,6 @@ impl Schema {
         };
         let mut result = engine
             .eval_closure(closure, Vec::new(), Some(value))
-            // TODO: forward internal error
             .map_err(|error| SchemaError::Custom {
                 schema_span: closure.span,
                 value_span,
