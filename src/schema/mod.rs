@@ -323,7 +323,7 @@ impl CustomValue for Schema {
                 } => record!(
                     "list" => Value::string("array".to_string(), Span::unknown()),
                     "items" => items.as_ref().item.clone().to_base_value(items.span)?,
-                    "length" => Value::range(Range::IntRange(length.item.clone()), length.span),
+                    "length" => Value::range(Range::IntRange(length.item), length.span),
                     "wrap_single" => Value::bool(wrap_single.item, wrap_single.span),
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                 )
@@ -360,7 +360,7 @@ impl CustomValue for Schema {
                         .map(|s| s.as_ref().item.to_base_value(Span::unknown()))
                         .transpose()?
                         .unwrap_or(Value::nothing(Span::unknown())),
-                    "length" => Value::range(Range::IntRange(length.item.clone()), length.span),
+                    "length" => Value::range(Range::IntRange(length.item), length.span),
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                 )
                 .into_spanned(span_fallback(span, *s)),
@@ -1038,22 +1038,20 @@ mod test {
                     Err(format!("failed assertion: {}", msg))
                 }
             }
+        } else if let Ok(value) = value {
+            println!("Expected Error");
+            println!("Got Value: {:?}", value);
+            Err(format!("failed assertion: {}", msg))
         } else {
-            if let Ok(value) = value {
-                println!("Expected Error");
-                println!("Got Value: {:?}", value);
-                Err(format!("failed assertion: {}", msg))
-            } else {
-                Ok(())
-            }
+            Ok(())
         }
     }
 
-    fn make_range(start: i64, next: i64, end: Option<i64>) -> IntRange {
+    fn make_range(start: i64, end: Option<i64>) -> IntRange {
         IntRange::new(
             Value::test_int(start),
-            Value::test_int(next),
-            end.map_or(Value::test_nothing(), |end| Value::test_int(end)),
+            Value::test_int(start + 1),
+            end.map_or(Value::test_nothing(), Value::test_int),
             nu_protocol::ast::RangeInclusion::Inclusive,
             Span::test_data(),
         )
@@ -1092,7 +1090,7 @@ mod test {
         Schema::Array {
             items: Box::new(elements).into_spanned(Span::test_data()),
             length: length
-                .unwrap_or(make_range(0, 1, None))
+                .unwrap_or(make_range(0, None))
                 .into_spanned(Span::test_data()),
             wrap_single: wrap_single.into_spanned(Span::test_data()),
             wrap_null: wrap_null.into_spanned(Span::test_data()),
@@ -1120,7 +1118,7 @@ mod test {
             keys: keys.map(|s| Box::new(s).into_spanned(Span::test_data())),
             values: values.map(|s| Box::new(s).into_spanned(Span::test_data())),
             length: length
-                .unwrap_or(make_range(0, 1, None))
+                .unwrap_or(make_range(0, None))
                 .into_spanned(Span::test_data()),
             wrap_null: wrap_null.into_spanned(Span::test_data()),
             span: Span::test_data(),
@@ -1290,7 +1288,7 @@ mod test {
         let schema_basic = schema_array(schema_type(Type::Int), None, true, true);
         let schema_fixed = schema_array(
             schema_type(Type::Int),
-            Some(make_range(2, 3, Some(2))),
+            Some(make_range(2, Some(2))),
             true,
             true,
         );
@@ -1395,7 +1393,7 @@ mod test {
                 schema_value(Value::test_string("y")),
             ])),
             Some(schema_type(Type::Int)),
-            Some(make_range(2, 3, Some(2))),
+            Some(make_range(2, Some(2))),
             false,
         );
         let map_ = Value::test_record(record!());
@@ -1469,7 +1467,7 @@ mod test {
         assert_conversion_roundtrip(
             schema_array(
                 schema_type(Type::Int),
-                Some(make_range(1, 2, Some(10))),
+                Some(make_range(1, Some(10))),
                 true,
                 true,
             ),
