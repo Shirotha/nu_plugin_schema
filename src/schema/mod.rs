@@ -596,6 +596,10 @@ impl FromValue for Schema {
 }
 impl Schema {
     #[inline]
+    pub fn into_value(self, span: Span) -> Value {
+        Value::custom(Box::new(self), span)
+    }
+    #[inline]
     pub fn apply_type(r#type: &Spanned<Type>, value: Value) -> Result<Value, SchemaError> {
         if value.get_type() == r#type.item {
             Ok(value)

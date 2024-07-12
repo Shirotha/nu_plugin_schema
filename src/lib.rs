@@ -1,5 +1,7 @@
 use nu_plugin::Plugin;
 
+use crate::schema::*;
+
 pub mod normalize;
 pub mod schema;
 
@@ -10,7 +12,7 @@ impl Plugin for SchemaPlugin {
     }
     fn commands(&self) -> Vec<Box<dyn nu_plugin::PluginCommand<Plugin = Self>>> {
         vec![
-            // TODO: add all commands
+            Box::new(ValueCmd), // TODO: add all commands
         ]
     }
 }
