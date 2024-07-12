@@ -11,8 +11,6 @@ impl Plugin for SchemaPlugin {
         env!("CARGO_PKG_VERSION").into()
     }
     fn commands(&self) -> Vec<Box<dyn nu_plugin::PluginCommand<Plugin = Self>>> {
-        vec![
-            Box::new(ValueCmd), // TODO: add all commands
-        ]
+        vec![Box::new(ValueCmd), Box::new(TupleCmd)]
     }
 }
