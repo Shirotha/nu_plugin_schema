@@ -1,4 +1,6 @@
 mod value;
+use std::ops::Deref;
+
 pub use value::*;
 mod array;
 pub use array::*;
@@ -11,8 +13,8 @@ pub use map::*;
 
 use nu_plugin::EngineInterface;
 use nu_protocol::{
-    engine::Closure, record, CustomValue, IntRange, IntoSpanned, IntoValue, Range, Record,
-    ShellError, Span, Spanned, Type, Value,
+    engine::Closure, record, CustomValue, FromValue, IntRange, IntoSpanned, IntoValue, Range,
+    Record, ShellError, Span, Spanned, Type, Value,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -44,6 +46,24 @@ impl SchemaError {
             Self::Custom { error, .. } => format!("Custom Closure Error: {}", error),
             Self::Shell(error) => format!("Internal Error: {}", error),
         }
+    }
+}
+
+#[inline]
+pub fn type_from_typename(r#type: &str) -> Option<Type> {
+    match r#type {
+        "binary" => Some(Type::Binary),
+        "bool" => Some(Type::Bool),
+        "date" => Some(Type::Date),
+        "duration" => Some(Type::Duration),
+        "filesize" => Some(Type::Filesize),
+        "float" => Some(Type::Float),
+        "int" => Some(Type::Int),
+        "nothing" => Some(Type::Nothing),
+        "range" => Some(Type::Range),
+        "string" => Some(Type::String),
+        "glob" => Some(Type::Glob),
+        _ => None,
     }
 }
 
@@ -104,6 +124,137 @@ pub enum Schema {
     /// Run custom code (`value | closure [value] -> result`)
     /// result is encoded into nu using `{ok: value}` and `{err: error}`
     Custom(Spanned<Closure>),
+}
+impl PartialEq for Schema {
+    fn eq(&self, other: &Self) -> bool {
+        match self {
+            Self::Type(r#type) => {
+                let Self::Type(other) = other else {
+                    return false;
+                };
+                r#type.item == other.item
+            }
+            Self::Value(value) => {
+                let Self::Value(other) = other else {
+                    return false;
+                };
+                value == other
+            }
+            Self::Fallback(value) => {
+                let Self::Fallback(other) = other else {
+                    return false;
+                };
+                value == other
+            }
+            Self::Any(options) => {
+                let Self::Any(other) = other else {
+                    return false;
+                };
+                options.as_ref().item == other.as_ref().item
+            }
+            Self::All(options) => {
+                let Self::All(other) = other else {
+                    return false;
+                };
+                options.as_ref().item == other.as_ref().item
+            }
+            Self::Tuple {
+                items,
+                wrap_single,
+                wrap_null,
+                ..
+            } => {
+                let Self::Tuple {
+                    items: items_,
+                    wrap_single: wrap_single_,
+                    wrap_null: wrap_null_,
+                    ..
+                } = other
+                else {
+                    return false;
+                };
+                items.as_ref().item == items_.as_ref().item
+                    && wrap_single.item == wrap_single_.item
+                    && wrap_null.item == wrap_null_.item
+            }
+            Self::Array {
+                items,
+                length,
+                wrap_single,
+                wrap_null,
+                ..
+            } => {
+                let Self::Array {
+                    items: items_,
+                    length: length_,
+                    wrap_single: wrap_single_,
+                    wrap_null: wrap_null_,
+                    ..
+                } = other
+                else {
+                    return false;
+                };
+                items.as_ref().item == items_.as_ref().item
+                    && length.as_ref().item == length_.as_ref().item
+                    && wrap_single.item == wrap_single_.item
+                    && wrap_null.item == wrap_null_.item
+            }
+            Self::Struct {
+                fields,
+                wrap_missing,
+                ..
+            } => {
+                let Self::Struct {
+                    fields: fields_,
+                    wrap_missing: wrap_missing_,
+                    ..
+                } = other
+                else {
+                    return false;
+                };
+                fields.as_ref().item == fields_.as_ref().item
+                    && wrap_missing.item == wrap_missing_.item
+            }
+            Self::Map {
+                keys,
+                values,
+                length,
+                wrap_null,
+                ..
+            } => {
+                #[inline]
+                fn cmp(a: &Option<Spanned<Box<Schema>>>, b: &Option<Spanned<Box<Schema>>>) -> bool {
+                    a.is_none() && b.is_none()
+                        || a.as_ref().is_some_and(|a| {
+                            b.as_ref()
+                                .is_some_and(|b| a.as_ref().item == b.as_ref().item)
+                        })
+                }
+                let Self::Map {
+                    keys: keys_,
+                    values: values_,
+                    length: length_,
+                    wrap_null: wrap_null_,
+                    ..
+                } = other
+                else {
+                    return false;
+                };
+                cmp(keys, keys_)
+                    && cmp(values, values_)
+                    && length.as_ref().item == length_.as_ref().item
+                    && wrap_null.item == wrap_null_.item
+            }
+            Self::Custom(closure) => {
+                let Self::Custom(other) = other else {
+                    return false;
+                };
+                let closure = closure.as_ref().item;
+                let other = other.as_ref().item;
+                closure.block_id == other.block_id && closure.captures == other.captures
+            }
+        }
+    }
 }
 
 #[inline]
@@ -225,6 +376,222 @@ impl CustomValue for Schema {
     }
     fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
         self
+    }
+}
+impl FromValue for Schema {
+    fn from_value(v: Value) -> Result<Self, ShellError> {
+        #[inline]
+        fn convert_error(from: &str, span: Span, help: &str) -> ShellError {
+            ShellError::CantConvert {
+                to_type: "Schema".to_string(),
+                from_type: from.to_string(),
+                span,
+                help: Some(help.to_string()),
+            }
+        }
+        #[inline]
+        fn to_bool(value: Option<&Value>, default: bool) -> Result<Spanned<bool>, ShellError> {
+            value.map_or_else(
+                || Ok(default.into_spanned(Span::unknown())),
+                |inner| -> Result<_, ShellError> {
+                    let span = inner.span();
+                    Ok(inner.as_bool()?.into_spanned(span))
+                },
+            )
+        }
+        #[inline]
+        fn to_single(value: &Value) -> Result<Spanned<Box<Schema>>, ShellError> {
+            let span = value.span();
+            Ok(Box::new(Schema::from_value(value.clone())?).into_spanned(span))
+        }
+        #[inline]
+        fn to_list(value: &Value) -> Result<Spanned<Box<[Schema]>>, ShellError> {
+            let span = value.span();
+            Ok(value
+                .as_list()?
+                .iter()
+                .cloned()
+                .map(Schema::from_value)
+                .collect::<Result<Box<[_]>, _>>()?
+                .into_spanned(span))
+        }
+        #[inline]
+        fn to_range(value: &Value) -> Result<Spanned<IntRange>, ShellError> {
+            let span = value.span();
+            let Range::IntRange(range) = value.as_range()? else {
+                return Err(convert_error(
+                    "range",
+                    span,
+                    "only integer ranges allowed for bounds",
+                ));
+            };
+            Ok(range.into_spanned(span))
+        }
+        #[inline]
+        fn unbounded() -> Spanned<IntRange> {
+            IntRange::new(
+                Value::int(0, Span::unknown()),
+                Value::nothing(Span::unknown()),
+                Value::nothing(Span::unknown()),
+                nu_protocol::ast::RangeInclusion::RightExclusive,
+                Span::unknown(),
+            )
+            .unwrap()
+            .into_spanned(Span::unknown())
+        }
+        match v {
+            Value::Custom { val, internal_span } => {
+                if val.type_name() == "Schema" {
+                    // SAFETY: val will always be Schema
+                    Ok(val.as_any().downcast_ref::<Schema>().unwrap().clone())
+                } else {
+                    Err(convert_error("custom", internal_span, "wrong custom type"))
+                }
+            }
+            Value::Record { val, internal_span } => {
+                // TODO: construct Schema without copying v
+                if val.len() == 1 {
+                    // SAFETY: get_index: val has exactly 1 field
+                    let (key, value) = val.get_index(0).unwrap();
+                    let span = value.span();
+                    match key.deref() {
+                        "type" => type_from_typename(value.as_str()?).map_or_else(
+                            || {
+                                Err(convert_error(
+                                    "record",
+                                    internal_span,
+                                    "unknown type constraint",
+                                ))
+                            },
+                            |r#type| Ok(Self::Type(r#type.into_spanned(span))),
+                        ),
+                        "value" => Ok(Self::Value(value.clone())),
+                        "fallback" => Ok(Self::Fallback(value.clone())),
+                        "any" => to_list(value).map(Self::Any),
+                        "all" => to_list(value).map(Self::All),
+                        "custom" => value
+                            .as_closure()
+                            .cloned()
+                            .map(|closure| Self::Custom(closure.into_spanned(span))),
+                        _ => Err(convert_error(
+                            "record",
+                            internal_span,
+                            "unknown schema definition",
+                        )),
+                    }
+                } else if let Some(list) = val.get("list") {
+                    match list.as_str()? {
+                        "tuple" => {
+                            let items = val.get("items").map_or_else(
+                                || {
+                                    Err(convert_error(
+                                        "record",
+                                        internal_span,
+                                        "tuple schema needs `items` field",
+                                    ))
+                                },
+                                to_list,
+                            )?;
+                            let wrap_single = to_bool(val.get("wrap_single"), false)?;
+                            let wrap_null = to_bool(val.get("wrap_null"), false)?;
+                            Ok(Self::Tuple {
+                                items,
+                                wrap_single,
+                                wrap_null,
+                                span: internal_span,
+                            })
+                        }
+                        "array" => {
+                            let items = val.get("items").map_or_else(
+                                || {
+                                    Err(convert_error(
+                                        "record",
+                                        internal_span,
+                                        "array schema needs `items` field",
+                                    ))
+                                },
+                                to_single,
+                            )?;
+                            let length = val
+                                .get("length")
+                                .map(to_range)
+                                .transpose()?
+                                .unwrap_or_else(unbounded);
+                            let wrap_single = to_bool(val.get("wrap_single"), false)?;
+                            let wrap_null = to_bool(val.get("wrap_null"), false)?;
+                            Ok(Self::Array {
+                                items,
+                                length,
+                                wrap_single,
+                                wrap_null,
+                                span: internal_span,
+                            })
+                        }
+                        _ => Err(convert_error("record", internal_span, "unknown list type")),
+                    }
+                } else if let Some(record) = val.get("record") {
+                    match record.as_str()? {
+                        "struct" => {
+                            let Some(fields) = val.get("fields") else {
+                                return Err(convert_error(
+                                    "record",
+                                    internal_span,
+                                    "struct schema needs `fields` field",
+                                ));
+                            };
+                            let span = fields.span();
+                            let fields = fields
+                                .as_record()?
+                                .iter()
+                                .map(|(key, value)| {
+                                    Ok((key.clone(), Schema::from_value(value.clone())?))
+                                })
+                                .collect::<Result<Box<[_]>, ShellError>>()?
+                                .into_spanned(span);
+                            let wrap_missing = to_bool(val.get("wrap_missing"), false)?;
+                            Ok(Self::Struct {
+                                fields,
+                                wrap_missing,
+                                span: internal_span,
+                            })
+                        }
+                        "map" => {
+                            let keys = val.get("keys").map(to_single).transpose()?;
+                            let values = val.get("values").map(to_single).transpose()?;
+                            let length = val
+                                .get("length")
+                                .map(to_range)
+                                .transpose()?
+                                .unwrap_or_else(unbounded);
+                            let wrap_null = to_bool(val.get("wrap_null"), false)?;
+                            Ok(Self::Map {
+                                keys,
+                                values,
+                                length,
+                                wrap_null,
+                                span: internal_span,
+                            })
+                        }
+                        _ => Err(convert_error(
+                            "record",
+                            internal_span,
+                            "unknown record type",
+                        )),
+                    }
+                } else {
+                    Err(convert_error(
+                        "record",
+                        internal_span,
+                        "unknown schema definition",
+                    ))
+                }
+            }
+            v => Err(convert_error(
+                &v.get_type().to_string(),
+                v.span(),
+                "direct conversion only works with records (see also schema command)",
+            )),
+        }
     }
 }
 impl Schema {
@@ -1073,6 +1440,51 @@ mod test {
             "matching length",
         )?;
         assert_schema(schema_fixed, map_xy_null.clone(), Some(None), "too long")?;
+        Ok(())
+    }
+
+    fn assert_conversion_roundtrip(schema: Schema, msg: &str) -> Result<(), String> {
+        let value = schema
+            .to_base_value(Span::test_data())
+            .map_err(|error| format!("failed conversion to value: {}", error))?;
+        let result = Schema::from_value(value)
+            .map_err(|error| format!("failed conversion from value {}", error))?;
+        if schema != result {
+            println!("conversion mismatch");
+            println!("  Expected: {:?}", schema);
+            println!("  Got: {:?}", result);
+            return Err(format!("conversion failed: {}", msg));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_convert_type() -> Result<(), String> {
+        assert_conversion_roundtrip(schema_type(Type::Int), "type")?;
+        assert_conversion_roundtrip(schema_value(Value::test_int(42)), "value")?;
+        assert_conversion_roundtrip(schema_fallback(Value::test_nothing()), "fallback")?;
+        assert_conversion_roundtrip(schema_any(vec![]), "any")?;
+        assert_conversion_roundtrip(schema_all(vec![]), "all")?;
+        assert_conversion_roundtrip(schema_tuple(vec![], true, true), "tuple")?;
+        assert_conversion_roundtrip(
+            schema_array(
+                schema_type(Type::Int),
+                Some(make_range(1, 2, Some(10))),
+                true,
+                true,
+            ),
+            "array",
+        )?;
+        assert_conversion_roundtrip(schema_struct(vec![], true), "struct")?;
+        assert_conversion_roundtrip(
+            schema_map(
+                Some(schema_all(vec![])),
+                Some(schema_type(Type::Int)),
+                None,
+                false,
+            ),
+            "map",
+        )?;
         Ok(())
     }
 }
