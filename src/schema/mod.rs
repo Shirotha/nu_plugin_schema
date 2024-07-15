@@ -38,16 +38,6 @@ pub enum SchemaError {
     #[error(transparent)]
     Shell(#[from] ShellError),
 }
-impl SchemaError {
-    pub fn message(&self) -> String {
-        match self {
-            Self::Schema { msg, .. } => format!("Schema Error: {}", msg),
-            Self::Value { msg, .. } => format!("Value Error: {}", msg),
-            Self::Custom { error, .. } => format!("Custom Closure Error: {}", error),
-            Self::Shell(error) => format!("Internal Error: {}", error),
-        }
-    }
-}
 
 #[inline]
 pub fn type_from_typename(r#type: &str) -> Option<Type> {
@@ -268,9 +258,11 @@ fn span_fallback(a: Span, b: Span) -> Span {
 
 #[typetag::serde]
 impl CustomValue for Schema {
+    #[inline(always)]
     fn type_name(&self) -> String {
         "Schema".to_string()
     }
+    #[inline]
     fn clone_value(&self, span: Span) -> Value {
         Value::custom(Box::new(self.clone()), span)
     }
@@ -371,9 +363,11 @@ impl CustomValue for Schema {
             };
         Ok(Value::record(result.item, result.span))
     }
+    #[inline(always)]
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
+    #[inline(always)]
     fn as_mut_any(&mut self) -> &mut dyn std::any::Any {
         self
     }
@@ -1039,7 +1033,7 @@ mod test {
                     Err(format!("failed assertion: {}", msg))
                 }
                 Err(error) => {
-                    println!("Unexpected Error: {}", error.message());
+                    println!("Unexpected Error: {}", error);
                     Err(format!("failed assertion: {}", msg))
                 }
             }

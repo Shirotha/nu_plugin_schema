@@ -9,6 +9,7 @@ use super::type_from_typename;
 
 pub struct ValueCmd;
 impl ValueCmd {
+    #[inline]
     pub fn run_direct(input: &Value) -> Result<Schema, LabeledError> {
         match input {
             Value::Record { .. } => Ok(Schema::from_value(input.clone())?),
@@ -52,12 +53,15 @@ impl ValueCmd {
 }
 impl SimplePluginCommand for ValueCmd {
     type Plugin = SchemaPlugin;
+    #[inline(always)]
     fn name(&self) -> &str {
         "schema"
     }
+    #[inline(always)]
     fn usage(&self) -> &str {
         "create a schema for a single value"
     }
+    #[inline]
     fn signature(&self) -> Signature {
         let out = Type::Custom("Schema".into());
         Signature::build(self.name()).input_output_types(vec![
@@ -68,6 +72,7 @@ impl SimplePluginCommand for ValueCmd {
         ])
     }
     // TODO: add explicit results to examples
+    #[inline]
     fn examples(&self) -> Vec<Example> {
         vec![
             Example {
@@ -92,6 +97,7 @@ impl SimplePluginCommand for ValueCmd {
             }
         ]
     }
+    #[inline]
     fn run(
         &self,
         _plugin: &Self::Plugin,

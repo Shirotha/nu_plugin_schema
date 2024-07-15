@@ -7,6 +7,7 @@ use crate::{Schema, SchemaPlugin, ValueCmd};
 
 pub struct TupleCmd;
 impl TupleCmd {
+    #[inline]
     pub fn run_direct(
         input: &Value,
         wrap_single: Option<Spanned<bool>>,
@@ -30,12 +31,15 @@ impl TupleCmd {
 }
 impl SimplePluginCommand for TupleCmd {
     type Plugin = SchemaPlugin;
+    #[inline(always)]
     fn name(&self) -> &str {
         "schema tuple"
     }
+    #[inline(always)]
     fn usage(&self) -> &str {
         "create a schema for a tuple (list)"
     }
+    #[inline]
     fn signature(&self) -> Signature {
         let out = Type::Custom("Schema".into());
         Signature::build("schema tuple")
@@ -57,6 +61,7 @@ impl SimplePluginCommand for TupleCmd {
             )
     }
     // TODO: add explicit results to examples
+    #[inline]
     fn examples(&self) -> Vec<Example> {
         vec![
             Example {
@@ -76,6 +81,7 @@ impl SimplePluginCommand for TupleCmd {
             },
         ]
     }
+    #[inline]
     fn run(
         &self,
         _plugin: &Self::Plugin,
