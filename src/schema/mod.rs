@@ -378,6 +378,19 @@ impl CustomValue for Schema {
         self
     }
 }
+#[inline]
+pub fn unbounded() -> Spanned<IntRange> {
+    IntRange::new(
+        Value::int(0, Span::unknown()),
+        Value::nothing(Span::unknown()),
+        Value::nothing(Span::unknown()),
+        nu_protocol::ast::RangeInclusion::RightExclusive,
+        Span::unknown(),
+    )
+    .unwrap()
+    .into_spanned(Span::unknown())
+}
+
 impl FromValue for Schema {
     fn from_value(v: Value) -> Result<Self, ShellError> {
         #[inline]
@@ -426,18 +439,6 @@ impl FromValue for Schema {
                 ));
             };
             Ok(range.into_spanned(span))
-        }
-        #[inline]
-        fn unbounded() -> Spanned<IntRange> {
-            IntRange::new(
-                Value::int(0, Span::unknown()),
-                Value::nothing(Span::unknown()),
-                Value::nothing(Span::unknown()),
-                nu_protocol::ast::RangeInclusion::RightExclusive,
-                Span::unknown(),
-            )
-            .unwrap()
-            .into_spanned(Span::unknown())
         }
         match v {
             Value::Custom { val, internal_span } => {
