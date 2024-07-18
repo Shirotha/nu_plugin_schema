@@ -16,7 +16,11 @@ use nu_protocol::{
     engine::Closure, record, CustomValue, FromValue, IntRange, IntoSpanned, IntoValue, Range,
     Record, ShellError, Span, Spanned, Type, Value,
 };
-use serde::{Deserialize, Serialize};
+use serde::{
+    de::{Error, Visitor},
+    ser::SerializeSeq,
+    Deserialize, Serialize,
+};
 use thiserror::Error;
 
 #[derive(Debug, Clone, Error)]
@@ -114,9 +118,8 @@ pub fn type_from_typename(r#type: &str) -> Option<Type> {
     }
 }
 
-// FIXME: not compatible with bincode serialization
 /// Representation of a schema that can be applied to a [`Value`].
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub enum Schema {
     /// Test against type
     Type(Spanned<Type>),
@@ -1068,6 +1071,193 @@ impl Schema {
             } => Self::apply_map(engine, keys, values, length, wrap_null, *span, value),
             Self::Custom(closure) => Self::apply_custom(engine, closure, value),
         }
+    }
+    const VAR_TYPE: u8 = 0;
+    const VAR_VALUE: u8 = 1;
+    const VAR_FALLBACK: u8 = 2;
+    const VAR_ANY: u8 = 3;
+    const VAR_ALL: u8 = 4;
+    const VAR_TUPLE: u8 = 5;
+    const VAR_ARRAY: u8 = 6;
+    const VAR_STRUCT: u8 = 7;
+    const VAR_MAP: u8 = 8;
+    const VAR_CUSTOM: u8 = 9;
+}
+macro_rules! serialize_seq {
+    ($seq:ident, $value:expr) => {
+        $seq.serialize_element($value)?;
+    };
+    ($seq:ident, $first:expr, $( $rest:expr ),+) => {
+        serialize_seq!($seq, $first);
+        serialize_seq!($seq, $( $rest ),*);
+    }
+}
+impl Serialize for Schema {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        match self {
+            Schema::Type(r#type) => {
+                serialize_seq!(seq, &Self::VAR_TYPE, r#type);
+            }
+            Schema::Value(value) => {
+                serialize_seq!(seq, &Self::VAR_VALUE, value);
+            }
+            Schema::Fallback(value) => {
+                serialize_seq!(seq, &Self::VAR_FALLBACK, value);
+            }
+            Schema::Any(options) => {
+                serialize_seq!(seq, &Self::VAR_ANY, options);
+            }
+            Schema::All(options) => {
+                serialize_seq!(seq, &Self::VAR_ALL, options);
+            }
+            Schema::Tuple {
+                items,
+                wrap_single,
+                wrap_null,
+                span,
+            } => {
+                serialize_seq!(seq, &Self::VAR_TUPLE, items, wrap_single, wrap_null, span);
+            }
+            Schema::Array {
+                items,
+                length,
+                wrap_single,
+                wrap_null,
+                span,
+            } => {
+                serialize_seq!(
+                    seq,
+                    &Self::VAR_ARRAY,
+                    items,
+                    length,
+                    wrap_single,
+                    wrap_null,
+                    span
+                );
+            }
+            Schema::Struct {
+                fields,
+                wrap_missing,
+                span,
+            } => {
+                serialize_seq!(seq, &Self::VAR_STRUCT, fields, wrap_missing, span);
+            }
+            Schema::Map {
+                keys,
+                values,
+                length,
+                wrap_null,
+                span,
+            } => {
+                serialize_seq!(seq, &Self::VAR_MAP, keys, values, length, wrap_null, span);
+            }
+            Schema::Custom(closure) => {
+                serialize_seq!(seq, &Self::VAR_CUSTOM, closure);
+            }
+        }
+        seq.end()
+    }
+}
+macro_rules! deserialize_seq {
+    ($seq:ident, $error:ty, $name:ident) => {
+        let Some($name) = $seq.next_element()? else {
+            return Err(<$error>::custom("sequence not long enough"))
+        };
+    };
+    ($seq:ident, $error:ty, $first:ident, $( $rest:ident ),+) => {
+        deserialize_seq!($seq, $error, $first);
+        deserialize_seq!($seq, $error, $( $rest ),*)
+    }
+}
+struct SchemaVisiter;
+impl<'de> Visitor<'de> for SchemaVisiter {
+    type Value = Schema;
+    #[inline]
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a Schema instance")
+    }
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: serde::de::SeqAccess<'de>,
+    {
+        deserialize_seq!(seq, A::Error, variant);
+        match variant {
+            Schema::VAR_TYPE => {
+                deserialize_seq!(seq, A::Error, r#type);
+                Ok(Schema::Type(r#type))
+            }
+            Schema::VAR_VALUE => {
+                deserialize_seq!(seq, A::Error, value);
+                Ok(Schema::Value(value))
+            }
+            Schema::VAR_FALLBACK => {
+                deserialize_seq!(seq, A::Error, value);
+                Ok(Schema::Fallback(value))
+            }
+            Schema::VAR_ANY => {
+                deserialize_seq!(seq, A::Error, options);
+                Ok(Schema::Any(options))
+            }
+            Schema::VAR_ALL => {
+                deserialize_seq!(seq, A::Error, options);
+                Ok(Schema::All(options))
+            }
+            Schema::VAR_TUPLE => {
+                deserialize_seq!(seq, A::Error, items, wrap_single, wrap_null, span);
+                Ok(Schema::Tuple {
+                    items,
+                    wrap_single,
+                    wrap_null,
+                    span,
+                })
+            }
+            Schema::VAR_ARRAY => {
+                deserialize_seq!(seq, A::Error, items, length, wrap_single, wrap_null, span);
+                Ok(Schema::Array {
+                    items,
+                    length,
+                    wrap_single,
+                    wrap_null,
+                    span,
+                })
+            }
+            Schema::VAR_STRUCT => {
+                deserialize_seq!(seq, A::Error, fields, wrap_missing, span);
+                Ok(Schema::Struct {
+                    fields,
+                    wrap_missing,
+                    span,
+                })
+            }
+            Schema::VAR_MAP => {
+                deserialize_seq!(seq, A::Error, keys, values, length, wrap_null, span);
+                Ok(Schema::Map {
+                    keys,
+                    values,
+                    length,
+                    wrap_null,
+                    span,
+                })
+            }
+            Schema::VAR_CUSTOM => {
+                deserialize_seq!(seq, A::Error, closure);
+                Ok(Schema::Custom(closure))
+            }
+            _ => Err(A::Error::custom("unknown variant")),
+        }
+    }
+}
+impl<'de> Deserialize<'de> for Schema {
+    #[inline(always)]
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(SchemaVisiter)
     }
 }
 

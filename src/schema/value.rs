@@ -14,7 +14,7 @@ impl ValueCmd {
     #[inline]
     pub fn run_direct(input: &Value) -> Result<Schema, LabeledError> {
         match input {
-            Value::Record { .. } => Ok(Schema::from_value(input.clone())?),
+            Value::Custom { .. } | Value::Record { .. } => Ok(Schema::from_value(input.clone())?),
             Value::String { val, internal_span } => {
                 let Some(r#type) = type_from_typename(val) else {
                     return Err(LabeledError::new("unsupported type constraint")

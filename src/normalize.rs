@@ -45,11 +45,11 @@ impl SimplePluginCommand for NormalizeCmd {
             Example {
                 example: "let schema = [[nothing {fallback: 0}] int] | schema array -sn\n[1 null 3] | normalize $schema",
                 description: "use previously defined schema",
-                result: None,/* Some(Value::test_list(vec![
+                result: Some(Value::test_list(vec![
                     Value::test_int(1),
                     Value::test_int(0),
                     Value::test_int(3),
-                ])), */
+                ])),
             },
         ]
     }
