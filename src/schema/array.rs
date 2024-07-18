@@ -1,7 +1,7 @@
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, IntRange, IntoSpanned, LabeledError, Range, Signature, Span, Spanned, SyntaxShape,
-    Type, Value,
+    Example, IntRange, IntoSpanned, IntoValue, LabeledError, Range, Signature, Span, Spanned,
+    SyntaxShape, Type, Value,
 };
 
 use crate::{unbounded, Schema, SchemaPlugin, ValueCmd};
@@ -39,20 +39,14 @@ impl SimplePluginCommand for ArrayCmd {
     #[inline]
     fn signature(&self) -> nu_protocol::Signature {
         Signature::build(self.name())
-            .input_output_type(Type::Any, Type::Custom("Schema".into()))
+            .input_output_type(Type::Any, Schema::r#type())
             .named("length", SyntaxShape::Range, "length constraint", Some('l'))
-            .named(
+            .switch(
                 "wrap-single",
-                SyntaxShape::Boolean,
                 "treat non-list, non-null values as array with single element",
                 Some('s'),
             )
-            .named(
-                "wrap-null",
-                SyntaxShape::Boolean,
-                "treat null as empty array",
-                Some('n'),
-            )
+            .switch("wrap-null", "treat null as empty array", Some('n'))
     }
     // TODO: add explicit results to examples
     #[inline]

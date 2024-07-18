@@ -1,6 +1,6 @@
 use nu_plugin::Plugin;
 
-use crate::schema::*;
+use crate::{normalize::NormalizeCmd, schema::*};
 
 pub mod normalize;
 pub mod schema;
@@ -11,6 +11,13 @@ impl Plugin for SchemaPlugin {
         env!("CARGO_PKG_VERSION").into()
     }
     fn commands(&self) -> Vec<Box<dyn nu_plugin::PluginCommand<Plugin = Self>>> {
-        vec![Box::new(ValueCmd), Box::new(TupleCmd)]
+        vec![
+            Box::new(ValueCmd),
+            Box::new(TupleCmd),
+            Box::new(ArrayCmd),
+            Box::new(StructCmd),
+            Box::new(MapCmd),
+            Box::new(NormalizeCmd),
+        ]
     }
 }

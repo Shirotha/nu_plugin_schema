@@ -1,6 +1,6 @@
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, IntoSpanned, LabeledError, Signature, Span, Spanned, SyntaxShape, Type, Value,
+    Example, IntoSpanned, IntoValue, LabeledError, Signature, Span, Spanned, Type, Value,
 };
 
 use crate::{Schema, SchemaPlugin, ValueCmd};
@@ -38,16 +38,8 @@ impl SimplePluginCommand for StructCmd {
     #[inline]
     fn signature(&self) -> Signature {
         Signature::build(self.name())
-            .input_output_type(
-                Type::Record(vec![].into_boxed_slice()),
-                Type::Custom("Schema".into()),
-            )
-            .named(
-                "wrap-missing",
-                SyntaxShape::Boolean,
-                "treat missing fields as null",
-                Some('m'),
-            )
+            .input_output_type(Type::Record(vec![].into_boxed_slice()), Schema::r#type())
+            .switch("wrap-missing", "treat missing fields as null", Some('m'))
     }
     #[inline]
     fn examples(&self) -> Vec<nu_protocol::Example> {

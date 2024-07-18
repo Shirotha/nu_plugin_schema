@@ -1,7 +1,9 @@
 use std::ops::Deref;
 
 use nu_plugin::SimplePluginCommand;
-use nu_protocol::{Example, FromValue, IntoSpanned, LabeledError, Signature, Type, Value};
+use nu_protocol::{
+    Example, FromValue, IntoSpanned, IntoValue, LabeledError, Signature, Type, Value,
+};
 
 use crate::{schema::Schema, SchemaPlugin};
 
@@ -63,7 +65,7 @@ impl SimplePluginCommand for ValueCmd {
     }
     #[inline]
     fn signature(&self) -> Signature {
-        let out = Type::Custom("Schema".into());
+        let out = Schema::r#type();
         Signature::build(self.name()).input_output_types(vec![
             (Type::Record(vec![].into_boxed_slice()), out.clone()),
             (Type::String, out.clone()),

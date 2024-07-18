@@ -38,6 +38,63 @@ pub enum SchemaError {
     #[error(transparent)]
     Shell(#[from] ShellError),
 }
+impl IntoValue for SchemaError {
+    #[inline]
+    fn into_value(self, span: Span) -> Value {
+        #[inline]
+        fn string_into_value(str: impl Into<String>) -> Value {
+            Value::string(str, Span::unknown())
+        }
+        #[inline]
+        fn span_into_value(span: Span) -> Value {
+            Value::record(
+                record!(
+                    "start" => Value::int(span.start as i64, Span::unknown()),
+                    "end" => Value::int(span.end as i64, Span::unknown())
+                ),
+                Span::unknown(),
+            )
+        }
+        let record = match self {
+            Self::Schema { span, msg } => {
+                record!(
+                    "type" => string_into_value("schema"),
+                    "msg" => string_into_value(msg),
+                    "span" => span_into_value(span)
+                )
+            }
+            Self::Value {
+                schema_span,
+                value_span,
+                msg,
+            } => {
+                record!(
+                    "type" => string_into_value("value"),
+                    "schema_span" => span_into_value(schema_span),
+                    "value_span" => span_into_value(value_span),
+                    "msg" => string_into_value(msg)
+                )
+            }
+            Self::Custom {
+                schema_span,
+                value_span,
+                error,
+            } => {
+                record!(
+                    "type" => string_into_value("custom"),
+                    "schema_span" => span_into_value(schema_span),
+                    "value_span" => span_into_value(value_span),
+                    "msg" => string_into_value(error.to_string())
+                )
+            }
+            Self::Shell(error) => record!(
+                "type" => string_into_value("shell"),
+                "msg" => string_into_value(error.to_string())
+            ),
+        };
+        Value::record(record, span)
+    }
+}
 
 #[inline]
 pub fn type_from_typename(r#type: &str) -> Option<Type> {
@@ -57,6 +114,7 @@ pub fn type_from_typename(r#type: &str) -> Option<Type> {
     }
 }
 
+// FIXME: not compatible with bincode serialization
 /// Representation of a schema that can be applied to a [`Value`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Schema {
@@ -260,7 +318,7 @@ fn span_fallback(a: Span, b: Span) -> Span {
 impl CustomValue for Schema {
     #[inline(always)]
     fn type_name(&self) -> String {
-        "Schema".to_string()
+        Self::TYPE_NAME.to_string()
     }
     #[inline]
     fn clone_value(&self, span: Span) -> Value {
@@ -390,7 +448,7 @@ impl FromValue for Schema {
         #[inline]
         fn convert_error(from: &str, span: Span, help: &str) -> ShellError {
             ShellError::CantConvert {
-                to_type: "Schema".to_string(),
+                to_type: Schema::TYPE_NAME.to_string(),
                 from_type: from.to_string(),
                 span,
                 help: Some(help.to_string()),
@@ -436,7 +494,7 @@ impl FromValue for Schema {
         }
         match v {
             Value::Custom { val, internal_span } => {
-                if val.type_name() == "Schema" {
+                if val.type_name() == Self::TYPE_NAME {
                     // SAFETY: val will always be Schema
                     Ok(val.as_any().downcast_ref::<Schema>().unwrap().clone())
                 } else {
@@ -589,10 +647,16 @@ impl FromValue for Schema {
         }
     }
 }
-impl Schema {
+impl IntoValue for Schema {
     #[inline]
-    pub fn into_value(self, span: Span) -> Value {
+    fn into_value(self, span: Span) -> Value {
         Value::custom(Box::new(self), span)
+    }
+}
+impl Schema {
+    pub const TYPE_NAME: &'static str = "Schema";
+    pub fn r#type() -> Type {
+        Type::Custom(Self::TYPE_NAME.into())
     }
     #[inline]
     pub fn apply_type(r#type: &Spanned<Type>, value: Value) -> Result<Value, SchemaError> {

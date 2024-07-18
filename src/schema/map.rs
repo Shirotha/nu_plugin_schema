@@ -1,7 +1,7 @@
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, IntRange, IntoSpanned, LabeledError, Range, Signature, Span, Spanned, SyntaxShape,
-    Type, Value,
+    Example, IntRange, IntoSpanned, IntoValue, LabeledError, Range, Signature, Span, Spanned,
+    SyntaxShape, Type, Value,
 };
 
 use crate::{unbounded, Schema, SchemaPlugin, ValueCmd};
@@ -66,19 +66,14 @@ impl SimplePluginCommand for MapCmd {
     }
     #[inline]
     fn signature(&self) -> Signature {
-        let out = Type::Custom("Schema".into());
+        let out = Schema::r#type();
         Signature::build(self.name())
             .input_output_types(vec![
                 (Type::List(Type::Any.into()), out.clone()),
                 (Type::Any, out),
             ])
             .named("length", SyntaxShape::Range, "length constraint", Some('l'))
-            .named(
-                "wrap-null",
-                SyntaxShape::Boolean,
-                "treat null as empty map",
-                Some('n'),
-            )
+            .switch("wrap-null", "treat null as empty map", Some('n'))
     }
     #[inline]
     fn examples(&self) -> Vec<nu_protocol::Example> {

@@ -1,6 +1,6 @@
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, IntoSpanned, LabeledError, Signature, Span, Spanned, SyntaxShape, Type, Value,
+    Example, IntoSpanned, IntoValue, LabeledError, Signature, Span, Spanned, Type, Value,
 };
 
 use crate::{Schema, SchemaPlugin, ValueCmd};
@@ -41,24 +41,18 @@ impl SimplePluginCommand for TupleCmd {
     }
     #[inline]
     fn signature(&self) -> Signature {
-        let out = Type::Custom("Schema".into());
+        let out = Schema::r#type();
         Signature::build("schema tuple")
             .input_output_types(vec![
                 (Type::List(Type::Any.into()), out.clone()),
                 (Type::Any, out),
             ])
-            .named(
+            .switch(
                 "wrap-single",
-                SyntaxShape::Boolean,
                 "treat non-list, non-null values as 1-tuples",
                 Some('s'),
             )
-            .named(
-                "wrap-null",
-                SyntaxShape::Boolean,
-                "treat null as 0-tuple",
-                Some('n'),
-            )
+            .switch("wrap-null", "treat null as 0-tuple", Some('n'))
     }
     // TODO: add explicit results to examples
     #[inline]
