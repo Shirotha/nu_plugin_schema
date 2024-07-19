@@ -3,15 +3,15 @@ use nu_protocol::{
     Example, IntoSpanned, IntoValue, LabeledError, Signature, Span, Spanned, Type, Value,
 };
 
-use crate::{Schema, SchemaPlugin, ValueCmd};
+use crate::{get_switch_spanned, Schema, SchemaPlugin, ValueCmd};
 
 pub struct TupleCmd;
 impl TupleCmd {
     #[inline]
     pub fn run_direct(
         input: &Value,
-        wrap_single: Option<Spanned<bool>>,
-        wrap_null: Option<Spanned<bool>>,
+        wrap_single: Spanned<bool>,
+        wrap_null: Spanned<bool>,
     ) -> Result<Schema, LabeledError> {
         let items = match input {
             Value::List { vals, .. } => vals
@@ -20,11 +20,10 @@ impl TupleCmd {
                 .collect::<Result<Box<[_]>, _>>()?,
             value => vec![ValueCmd::run_direct(value)?].into_boxed_slice(),
         };
-        let default = false.into_spanned(Span::unknown());
         Ok(Schema::Tuple {
             items: items.into_spanned(input.span()),
-            wrap_single: wrap_single.unwrap_or(default),
-            wrap_null: wrap_null.unwrap_or(default),
+            wrap_single,
+            wrap_null,
             span: input.span(),
         })
     }
@@ -54,24 +53,68 @@ impl SimplePluginCommand for TupleCmd {
             )
             .switch("wrap-null", "treat null as 0-tuple", Some('n'))
     }
-    // TODO: add explicit results to examples
     #[inline]
     fn examples(&self) -> Vec<Example> {
         vec![
             Example {
                 example: "[int int] | schema tuple",
                 description: "create explicit tuple schema",
-                result: None,
+                result: Some(
+                    Schema::Tuple {
+                        items: vec![
+                            Schema::Type(Type::Int.into_spanned(Span::test_data())),
+                            Schema::Type(Type::Int.into_spanned(Span::test_data())),
+                        ]
+                        .into_boxed_slice()
+                        .into_spanned(Span::test_data()),
+                        wrap_single: false.into_spanned(Span::test_data()),
+                        wrap_null: false.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
             Example {
                 example: "[[nothing {fallback: 0}] int] | schema | schema tuple --wrap-single",
                 description: "create 1-tuple schema that wraps single values",
-                result: None,
+                result: Some(
+                    Schema::Tuple {
+                        items: vec![Schema::Any(
+                            vec![
+                                Schema::All(
+                                    vec![
+                                        Schema::Type(Type::Nothing.into_spanned(Span::test_data())),
+                                        Schema::Fallback(Value::test_int(0)),
+                                    ]
+                                    .into_boxed_slice()
+                                    .into_spanned(Span::test_data()),
+                                ),
+                                Schema::Type(Type::Int.into_spanned(Span::test_data())),
+                            ]
+                            .into_boxed_slice()
+                            .into_spanned(Span::test_data()),
+                        )]
+                        .into_boxed_slice()
+                        .into_spanned(Span::test_data()),
+                        wrap_single: true.into_spanned(Span::test_data()),
+                        wrap_null: false.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
             Example {
                 example: "[] | schema tuple --wrap-null",
                 description: "create 0-tuple schema that wraps null",
-                result: None,
+                result: Some(
+                    Schema::Tuple {
+                        items: vec![].into_boxed_slice().into_spanned(Span::test_data()),
+                        wrap_single: false.into_spanned(Span::test_data()),
+                        wrap_null: true.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
         ]
     }
@@ -83,10 +126,11 @@ impl SimplePluginCommand for TupleCmd {
         call: &nu_plugin::EvaluatedCall,
         input: &Value,
     ) -> Result<Value, LabeledError> {
+        eprintln!("call {:?}", call);
         Ok(Self::run_direct(
             input,
-            call.get_flag("wrap-single")?,
-            call.get_flag("wrap-null")?,
+            get_switch_spanned(call, "wrap-single")?,
+            get_switch_spanned(call, "wrap-null")?,
         )?
         .into_value(input.span()))
     }
@@ -94,7 +138,7 @@ impl SimplePluginCommand for TupleCmd {
 
 #[cfg(test)]
 #[test]
-fn test_tuple_examples() -> Result<(), nu_protocol::ShellError> {
+fn test_examples() -> Result<(), nu_protocol::ShellError> {
     nu_plugin_test_support::PluginTest::new("schema", SchemaPlugin.into())?
         .test_command_examples(&TupleCmd)
 }

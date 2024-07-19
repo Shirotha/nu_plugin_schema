@@ -2,7 +2,7 @@ use std::ops::Deref;
 
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, FromValue, IntoSpanned, IntoValue, LabeledError, Signature, Type, Value,
+    Example, FromValue, IntoSpanned, IntoValue, LabeledError, Signature, Span, Type, Value,
 };
 
 use crate::{schema::Schema, SchemaPlugin};
@@ -73,27 +73,32 @@ impl SimplePluginCommand for ValueCmd {
             (Type::Closure, out),
         ])
     }
-    // TODO: add explicit results to examples
     #[inline]
     fn examples(&self) -> Vec<Example> {
         vec![
             Example {
-                example: "0 | wrap value | schema",
+                example: "{value: 0} | schema",
                 description: "create schema from explicit record",
-                result: None
+                result: Some(Schema::Value(Value::test_int(0)).into_value(Span::test_data()))
                 },
             Example {
                 example: "'int' | schema",
                 description: "create schema from type shorthand",
-                result: None,
+                result: Some(Schema::Type(Type::Int.into_spanned(Span::test_data())).into_value(Span::test_data())),
             },
             Example {
                 example: "[[nothing {fallback: 0}] int] | schema",
                 description: "create schema from any/all compound",
-                result: None,
+                result: Some(Schema::Any(vec![
+                    Schema::All(vec![
+                        Schema::Type(Type::Nothing.into_spanned(Span::test_data())),
+                        Schema::Fallback(Value::test_int(0))
+                    ].into_boxed_slice().into_spanned(Span::test_data())),
+                    Schema::Type(Type::Int.into_spanned(Span::test_data()))
+                ].into_boxed_slice().into_spanned(Span::test_data())).into_value(Span::test_data())),
             },
             Example {
-                example: "{ if 0 <= $in and $in <= 100 { $in | wrap ok } else { 'out of bounds' | wrap err } } | schema",
+                example: "{ if 0 <= $in and $in <= 100 { {ok: $in} } else { {err: 'out of bounds'} } } | schema",
                 description: "create custom schema using a closure",
                 result: None
             }
@@ -113,7 +118,7 @@ impl SimplePluginCommand for ValueCmd {
 
 #[cfg(test)]
 #[test]
-fn test_value_examples() -> Result<(), nu_protocol::ShellError> {
+fn test_examples() -> Result<(), nu_protocol::ShellError> {
     nu_plugin_test_support::PluginTest::new("schema", SchemaPlugin.into())?
         .test_command_examples(&ValueCmd)
 }

@@ -1,18 +1,18 @@
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, IntRange, IntoSpanned, IntoValue, LabeledError, Range, Signature, Span, Spanned,
-    SyntaxShape, Type, Value,
+    ast::RangeInclusion, Example, IntRange, IntoSpanned, IntoValue, LabeledError, Signature, Span,
+    Spanned, SyntaxShape, Type, Value,
 };
 
-use crate::{unbounded, Schema, SchemaPlugin, ValueCmd};
+use crate::{get_optional_range, get_switch_spanned, unbounded, Schema, SchemaPlugin, ValueCmd};
 
 pub struct MapCmd;
 impl MapCmd {
     #[inline]
     pub fn run_direct(
         input: &Value,
-        length: Option<Spanned<IntRange>>,
-        wrap_null: Option<Spanned<bool>>,
+        length: Spanned<IntRange>,
+        wrap_null: Spanned<bool>,
     ) -> Result<Schema, LabeledError> {
         #[inline]
         fn into_schema(value: &Value) -> Result<Option<Spanned<Box<Schema>>>, LabeledError> {
@@ -20,8 +20,6 @@ impl MapCmd {
                 Box::new(ValueCmd::run_direct(value)?).into_spanned(value.span()),
             ))
         }
-        let length = length.unwrap_or_else(unbounded);
-        let wrap_null = wrap_null.unwrap_or_else(|| false.into_spanned(Span::unknown()));
         match input {
             Value::List {
                 vals,
@@ -81,12 +79,55 @@ impl SimplePluginCommand for MapCmd {
             Example {
                 example: "'int' | schema map --wrap-null",
                 description: "create map schema with constraint values and wrapping null",
-                result: None,
+                result: Some(
+                    Schema::Map {
+                        keys: None,
+                        values: Some(
+                            Box::new(Schema::Type(Type::Int.into_spanned(Span::test_data())))
+                                .into_spanned(Span::test_data()),
+                        ),
+                        length: unbounded(),
+                        wrap_null: true.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
             Example {
-                example: "[([x y z] | each { wrap value }) int] | schema map --length 1..3",
+                example: "[[{value: x} {value: y} {value: z}] int] | schema map --length 1..3",
                 description: "create map schema with constraint keys and values and limited length",
-                result: None,
+                result: Some(
+                    Schema::Map {
+                        keys: Some(
+                            Box::new(Schema::Any(
+                                vec![
+                                    Schema::Value(Value::test_string("x")),
+                                    Schema::Value(Value::test_string("y")),
+                                    Schema::Value(Value::test_string("z")),
+                                ]
+                                .into_boxed_slice()
+                                .into_spanned(Span::test_data()),
+                            ))
+                            .into_spanned(Span::test_data()),
+                        ),
+                        values: Some(
+                            Box::new(Schema::Type(Type::Int.into_spanned(Span::test_data())))
+                                .into_spanned(Span::test_data()),
+                        ),
+                        length: IntRange::new(
+                            Value::test_int(1),
+                            Value::test_int(2),
+                            Value::test_int(3),
+                            RangeInclusion::Inclusive,
+                            Span::test_data(),
+                        )
+                        .unwrap()
+                        .into_spanned(Span::test_data()),
+                        wrap_null: false.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
         ]
     }
@@ -100,17 +141,8 @@ impl SimplePluginCommand for MapCmd {
     ) -> Result<Value, LabeledError> {
         Ok(Self::run_direct(
             input,
-            call.get_flag("length")?
-                .map(|range: Spanned<Range>| {
-                    let span = range.span;
-                    let Range::IntRange(range) = range.item else {
-                        return Err(LabeledError::new("only integer ranges are allowed")
-                            .with_label("float range", span));
-                    };
-                    Ok(range.into_spanned(span))
-                })
-                .transpose()?,
-            call.get_flag("wrap-null")?,
+            get_optional_range(call, "length")?,
+            get_switch_spanned(call, "wrap-null")?,
         )?
         .into_value(input.span()))
     }
@@ -118,7 +150,7 @@ impl SimplePluginCommand for MapCmd {
 
 #[cfg(test)]
 #[test]
-fn test_tuple_examples() -> Result<(), nu_protocol::ShellError> {
+fn test_examples() -> Result<(), nu_protocol::ShellError> {
     nu_plugin_test_support::PluginTest::new("schema", SchemaPlugin.into())?
         .test_command_examples(&MapCmd)
 }

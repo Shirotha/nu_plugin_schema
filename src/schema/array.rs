@@ -1,27 +1,26 @@
 use nu_plugin::SimplePluginCommand;
 use nu_protocol::{
-    Example, IntRange, IntoSpanned, IntoValue, LabeledError, Range, Signature, Span, Spanned,
-    SyntaxShape, Type, Value,
+    ast::RangeInclusion, Example, IntRange, IntoSpanned, IntoValue, LabeledError, Signature, Span,
+    Spanned, SyntaxShape, Type, Value,
 };
 
-use crate::{unbounded, Schema, SchemaPlugin, ValueCmd};
+use crate::{get_optional_range, get_switch_spanned, unbounded, Schema, SchemaPlugin, ValueCmd};
 
 pub struct ArrayCmd;
 impl ArrayCmd {
     #[inline]
     pub fn run_direct(
         input: &Value,
-        length: Option<Spanned<IntRange>>,
-        wrap_single: Option<Spanned<bool>>,
-        wrap_null: Option<Spanned<bool>>,
+        length: Spanned<IntRange>,
+        wrap_single: Spanned<bool>,
+        wrap_null: Spanned<bool>,
     ) -> Result<Schema, LabeledError> {
         let items = Box::new(ValueCmd::run_direct(input)?).into_spanned(input.span());
-        let default = false.into_spanned(Span::unknown());
         Ok(Schema::Array {
             items,
-            length: length.unwrap_or_else(unbounded),
-            wrap_single: wrap_single.unwrap_or(default),
-            wrap_null: wrap_null.unwrap_or(default),
+            length,
+            wrap_single,
+            wrap_null,
             span: input.span(),
         })
     }
@@ -48,19 +47,60 @@ impl SimplePluginCommand for ArrayCmd {
             )
             .switch("wrap-null", "treat null as empty array", Some('n'))
     }
-    // TODO: add explicit results to examples
     #[inline]
     fn examples(&self) -> Vec<nu_protocol::Example> {
         vec![
             Example {
                 example: "'int' | schema array --length 2..10",
                 description: "create a array schema that restricts the length",
-                result: None,
+                result: Some(
+                    Schema::Array {
+                        items: Box::new(Schema::Type(Type::Int.into_spanned(Span::test_data())))
+                            .into_spanned(Span::test_data()),
+                        length: IntRange::new(
+                            Value::test_int(2),
+                            Value::test_int(3),
+                            Value::test_int(10),
+                            RangeInclusion::Inclusive,
+                            Span::test_data(),
+                        )
+                        .unwrap()
+                        .into_spanned(Span::test_data()),
+                        wrap_single: false.into_spanned(Span::test_data()),
+                        wrap_null: false.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
             Example {
                 example: "[[nothing, {fallback: 0}] int] | schema array --wrap-null --wrap-single",
                 description: "create a array schema that wraps single values and null",
-                result: None,
+                result: Some(
+                    Schema::Array {
+                        items: Box::new(Schema::Any(
+                            vec![
+                                Schema::All(
+                                    vec![
+                                        Schema::Type(Type::Nothing.into_spanned(Span::test_data())),
+                                        Schema::Fallback(Value::test_int(0)),
+                                    ]
+                                    .into_boxed_slice()
+                                    .into_spanned(Span::test_data()),
+                                ),
+                                Schema::Type(Type::Int.into_spanned(Span::test_data())),
+                            ]
+                            .into_boxed_slice()
+                            .into_spanned(Span::test_data()),
+                        ))
+                        .into_spanned(Span::test_data()),
+                        length: unbounded(),
+                        wrap_single: true.into_spanned(Span::test_data()),
+                        wrap_null: true.into_spanned(Span::test_data()),
+                        span: Span::test_data(),
+                    }
+                    .into_value(Span::test_data()),
+                ),
             },
         ]
     }
@@ -74,18 +114,9 @@ impl SimplePluginCommand for ArrayCmd {
     ) -> Result<Value, LabeledError> {
         Ok(Self::run_direct(
             input,
-            call.get_flag("length")?
-                .map(|range: Spanned<Range>| {
-                    let span = range.span;
-                    let Range::IntRange(range) = range.item else {
-                        return Err(LabeledError::new("only integer ranges are allowed")
-                            .with_label("float range", span));
-                    };
-                    Ok(range.into_spanned(span))
-                })
-                .transpose()?,
-            call.get_flag("wrap_single")?,
-            call.get_flag("wrap_null")?,
+            get_optional_range(call, "length")?,
+            get_switch_spanned(call, "wrap-single")?,
+            get_switch_spanned(call, "wrap-null")?,
         )?
         .into_value(input.span()))
     }
@@ -93,7 +124,7 @@ impl SimplePluginCommand for ArrayCmd {
 
 #[cfg(test)]
 #[test]
-fn test_tuple_examples() -> Result<(), nu_protocol::ShellError> {
+fn test_examples() -> Result<(), nu_protocol::ShellError> {
     nu_plugin_test_support::PluginTest::new("schema", SchemaPlugin.into())?
         .test_command_examples(&ArrayCmd)
 }

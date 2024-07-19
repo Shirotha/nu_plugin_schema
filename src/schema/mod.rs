@@ -1,5 +1,5 @@
 mod value;
-use std::ops::Deref;
+use std::{cmp::Ordering, ops::Deref};
 
 pub use value::*;
 mod array;
@@ -307,6 +307,16 @@ impl PartialEq for Schema {
         }
     }
 }
+impl PartialOrd for Schema {
+    #[inline]
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self.eq(other) {
+            Some(Ordering::Equal)
+        } else {
+            None
+        }
+    }
+}
 
 #[inline]
 fn span_fallback(a: Span, b: Span) -> Span {
@@ -326,6 +336,15 @@ impl CustomValue for Schema {
     #[inline]
     fn clone_value(&self, span: Span) -> Value {
         Value::custom(Box::new(self.clone()), span)
+    }
+    fn partial_cmp(&self, other: &Value) -> Option<Ordering> {
+        match other {
+            Value::Custom { val, .. } => val
+                .as_any()
+                .downcast_ref()
+                .and_then(|other| <Schema as PartialOrd>::partial_cmp(self, other)),
+            _ => None,
+        }
     }
     fn to_base_value(&self, span: Span) -> Result<Value, ShellError> {
         let result =
