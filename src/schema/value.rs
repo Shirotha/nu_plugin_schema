@@ -9,6 +9,8 @@ use crate::{schema::Schema, SchemaPlugin};
 
 use super::type_from_typename;
 
+/// Plugin command to create a [`Schema`] for a single value.
+/// This can also be used to create a [`Schema`] from a record (see [`Schema::from_value`]).
 pub struct ValueCmd;
 impl ValueCmd {
     #[inline]

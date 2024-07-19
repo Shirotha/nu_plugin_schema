@@ -5,6 +5,7 @@ use nu_protocol::{
 
 use crate::{get_switch_spanned, Schema, SchemaPlugin, ValueCmd};
 
+// Plugin command to create a [`Schema`] for a tuple.
 pub struct TupleCmd;
 impl TupleCmd {
     #[inline]

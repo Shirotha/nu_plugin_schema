@@ -3,6 +3,7 @@ use nu_protocol::{record, Example, IntoValue, LabeledError, Signature, Type, Val
 
 use crate::{SchemaError, SchemaPlugin, ValueCmd};
 
+/// Plugin command to apply [`Schema`] to a [`Value`] (see [`Schema::apply`]).
 pub struct NormalizeCmd;
 impl SimplePluginCommand for NormalizeCmd {
     type Plugin = SchemaPlugin;

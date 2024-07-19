@@ -1,3 +1,46 @@
+//! This plugin provides a mechanism to validate and coerce a [`Value`] of arbitrary complexity.
+//!
+//! # Usage
+//! Use the `normalize` command to test values.
+//! It can either be used inline
+//! ```nu
+//! 42 | normalize int # => 42
+//! '42' | normalize int # causes error
+//! '42' | normalize int --result # => {err: "..."}
+//! ```
+//! Or by defining a schema using the `schema` command and its subcommands
+//! ```nu
+//! let schema = [[nothing {fallback: 0}] int] | schema
+//! null | normalize $schema # => 0
+//! let point = [
+//!     int
+//!     $schema
+//!     $schema
+//! ] | schema tuple --wrap-single
+//! [1 2 3] | normalize $tuple # => [1 2 3]
+//! 42 | normalize $tuple # => [42 0 0]
+//! ```
+//! Nested schema can be defined using closures
+//! ```nu
+//! let leaf = [int nothing] | schema
+//! let branch = {
+//!     left: { normalize $node }
+//!     right: { normalize $node }
+//! } | schema tuple --wrap-missing
+//! let node = [
+//!     $leaf
+//!     $branch
+//! ] | schema
+//! let input = {
+//!     left: {
+//!         right: 1
+//!     }
+//!     right: 2
+//! }
+//! let tree = normalize $node
+//! $tree.right # => 2
+//! $tree.left.left # => null
+//! ```
 use nu_plugin::{EvaluatedCall, Plugin};
 use nu_protocol::{
     FromValue, IntRange, IntoSpanned, LabeledError, Range, ShellError, Span, Spanned,
@@ -8,6 +51,7 @@ use crate::{normalize::NormalizeCmd, schema::*};
 pub mod normalize;
 pub mod schema;
 
+/// Core plugin type, manages all commands.
 pub struct SchemaPlugin;
 impl Plugin for SchemaPlugin {
     fn version(&self) -> String {

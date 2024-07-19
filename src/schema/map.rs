@@ -6,6 +6,7 @@ use nu_protocol::{
 
 use crate::{get_optional_range, get_switch_spanned, unbounded, Schema, SchemaPlugin, ValueCmd};
 
+/// Plugin command to create a [`Schema`] for a map.
 pub struct MapCmd;
 impl MapCmd {
     #[inline]

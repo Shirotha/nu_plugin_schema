@@ -100,6 +100,9 @@ impl IntoValue for SchemaError {
     }
 }
 
+/// Create a [`Type`] from the corresponding name.
+/// Only types supported by [`Schema::Type`] will be converted, passing unsupported types will return `None`.
+/// Specifically complex types are not supported, as they are handled by other [`Schema`] variants.
 #[inline]
 pub fn type_from_typename(r#type: &str) -> Option<Type> {
     match r#type {
@@ -121,59 +124,68 @@ pub fn type_from_typename(r#type: &str) -> Option<Type> {
 /// Representation of a schema that can be applied to a [`Value`].
 #[derive(Debug, Clone)]
 pub enum Schema {
-    /// Test against type
+    /// Test against [`Type`].
     Type(Spanned<Type>),
-    /// Test against value
+    /// Test against [`Value`].
     Value(Value),
-    /// Ignore input and return given value
+    /// Ignore input and return given [`Value`].
     Fallback(Value),
-    /// Test against multiple schema, will accept first passing schema
+    /// Test against multiple schema, will accept first passing schema.
+    /// Passing no schema will cause this to always fail.
     Any(Spanned<Box<[Schema]>>),
-    /// Test against multiple schema, will accept last schema when all are passing
+    /// Test against multiple schema, will accept last schema when all are passing.
+    /// Passing no schema will cause this to always succeed, in that case the input value is passed through.
     All(Spanned<Box<[Schema]>>),
-    /// Descibes a heterogeneous list
+    /// Descibes a heterogeneous list.
     Tuple {
+        /// Inner schema per element.
         items: Spanned<Box<[Schema]>>,
-        /// Allow wrapping single non-list, non-null value into 1-length list
+        /// Allow wrapping single non-list, non-null value into 1-length list.
         wrap_single: Spanned<bool>,
-        /// Allow treating `null` as empty list
+        /// Allow treating `null` as empty list.
         wrap_null: Spanned<bool>,
         span: Span,
     },
-    /// Describes a homogeneous list
+    /// Describes a homogeneous list.
     Array {
-        /// Inner schema
+        /// Inner schema for all elements.
         items: Spanned<Box<Schema>>,
-        /// Length restriction
+        /// Length restriction.
         length: Spanned<IntRange>,
-        /// Allow wrapping single non-list, non-null value into 1-length list
+        /// Allow wrapping single non-list, non-null value into 1-length list.
         wrap_single: Spanned<bool>,
-        /// Allow treating `null` as empty list
+        /// Allow treating `null` as empty list.
         wrap_null: Spanned<bool>,
         span: Span,
     },
-    /// Describes a heterogeneous record
+    /// Describes a heterogeneous record.
     Struct {
-        /// Inner schema per field
+        /// Inner schema per field.
         fields: Spanned<Box<[(String, Schema)]>>,
-        /// Missing fields will be treated as `null`
+        /// Missing fields will be treated as `null`.
         wrap_missing: Spanned<bool>,
         span: Span,
     },
     /// Describes a homegeneous record
     Map {
-        /// Inner schema for keys
+        /// Inner schema for keys.
         keys: Option<Spanned<Box<Schema>>>,
-        /// Inner schema for values
+        /// Inner schema for values.
         values: Option<Spanned<Box<Schema>>>,
-        /// Length restriction
+        /// Length restriction.
         length: Spanned<IntRange>,
-        /// Allow treating `null` as empty record
+        /// Allow treating `null` as empty record.
         wrap_null: Spanned<bool>,
         span: Span,
     },
-    /// Run custom code (`value | closure [value] -> result`)
-    /// result is encoded into nu using `{ok: value}` and `{err: error}`
+    /// Run custom code.
+    /// Closure will be called equivalent to
+    /// ```nu
+    /// $value | do $closure
+    /// ```
+    /// The return value is expected to be one of
+    /// - `{ok: value}`: Schema is succesfull and `value` is the result
+    /// - `{err: msg}`: Schema failed with error message `msg`
     Custom(Spanned<Closure>),
 }
 impl PartialEq for Schema {
@@ -676,7 +688,9 @@ impl IntoValue for Schema {
     }
 }
 impl Schema {
+    /// Name used in [`Type::Custom`].
     pub const TYPE_NAME: &'static str = "Schema";
+    /// Return the corresponding [`Type::Custom`].
     pub fn r#type() -> Type {
         Type::Custom(Self::TYPE_NAME.into())
     }
@@ -1052,6 +1066,8 @@ impl Schema {
             })
         }
     }
+    /// Apply the schema to a [`Value`].
+    /// `engine` is required to test against [`Schema::Custom`], can be `None` when not needed.
     pub fn apply(
         &self,
         engine: Option<&EngineInterface>,

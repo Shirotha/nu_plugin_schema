@@ -5,6 +5,7 @@ use nu_protocol::{
 
 use crate::{get_switch_spanned, Schema, SchemaPlugin, ValueCmd};
 
+/// Plugin command to createa a [`Schema`] for a struct.
 pub struct StructCmd;
 impl StructCmd {
     #[inline]
