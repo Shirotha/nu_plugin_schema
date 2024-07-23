@@ -1,5 +1,9 @@
 mod value;
-use std::{cmp::Ordering, iter::repeat, ops::Deref};
+use std::{
+    cmp::Ordering,
+    iter::{once, repeat},
+    ops::Deref,
+};
 
 pub use value::*;
 mod array;
@@ -164,8 +168,10 @@ pub enum Schema {
         fields: Spanned<Box<[(String, Schema)]>>,
         /// Missing fields will be treated as `null`.
         wrap_missing: Spanned<bool>,
-        /// Allow wrapping lists into record in order of defined fields
+        /// Allow wrapping lists into record in order of defined fields.
         wrap_list: Spanned<bool>,
+        /// Allow wrapping non-record, non-list value into single field record.
+        wrap_single: Spanned<bool>,
         span: Span,
     },
     /// Describes a homegeneous record
@@ -418,6 +424,7 @@ impl CustomValue for Schema {
                     fields,
                     wrap_missing,
                     wrap_list,
+                    wrap_single,
                     span: s,
                 } => {
                     let mut record = Record::new();
@@ -428,7 +435,8 @@ impl CustomValue for Schema {
                         "record" => Value::string("struct".to_string(), Span::unknown()),
                         "fields" => Value::record(record, fields.span),
                         "wrap_missing" => Value::bool(wrap_missing.item, wrap_missing.span),
-                        "wrap_list" => Value::bool(wrap_list.item, wrap_list.span)
+                        "wrap_list" => Value::bool(wrap_list.item, wrap_list.span),
+                        "wrap_single" => Value::bool(wrap_single.item, wrap_single.span)
                     )
                     .into_spanned(span_fallback(span, *s))
                 }
@@ -641,10 +649,12 @@ impl FromValue for Schema {
                                 .into_spanned(span);
                             let wrap_missing = to_bool(val.get("wrap_missing"), false)?;
                             let wrap_list = to_bool(val.get("wrap_list"), false)?;
+                            let wrap_single = to_bool(val.get("wrap_single"), false)?;
                             Ok(Self::Struct {
                                 fields,
                                 wrap_missing,
                                 wrap_list,
+                                wrap_single,
                                 span: internal_span,
                             })
                         }
@@ -894,6 +904,7 @@ impl Schema {
         fields: &Spanned<Box<[(String, Schema)]>>,
         wrap_missing: &Spanned<bool>,
         wrap_list: &Spanned<bool>,
+        wrap_single: &Spanned<bool>,
         span: Span,
         value: Value,
     ) -> Result<Value, SchemaError> {
@@ -939,11 +950,31 @@ impl Schema {
                         msg: "too many fields".to_string(),
                     });
                 }
-                let mut record = Record::with_capacity(vals.len());
+                let mut record = Record::with_capacity(inner.len());
                 for ((field, schema), value) in inner.iter().zip(
                     vals.into_iter()
                         .chain(repeat(Value::nothing(Span::unknown()))),
                 ) {
+                    match schema.apply(engine, value) {
+                        Ok(value) => _ = record.insert(field, value),
+                        Err(error) => return Err(error),
+                    }
+                }
+                record
+            }
+            value if wrap_single.item => {
+                if inner.len() == 0 {
+                    return Err(SchemaError::Value {
+                        schema_span: fields.span,
+                        value_span,
+                        msg: "too many fields".to_string(),
+                    });
+                }
+                let mut record = Record::with_capacity(inner.len());
+                for ((field, schema), value) in inner
+                    .iter()
+                    .zip(once(value).chain(repeat(Value::nothing(Span::unknown()))))
+                {
                     match schema.apply(engine, value) {
                         Ok(value) => _ = record.insert(field, value),
                         Err(error) => return Err(error),
@@ -1129,8 +1160,17 @@ impl Schema {
                 fields,
                 wrap_missing,
                 wrap_list,
+                wrap_single,
                 span,
-            } => Self::apply_struct(engine, fields, wrap_missing, wrap_list, *span, value),
+            } => Self::apply_struct(
+                engine,
+                fields,
+                wrap_missing,
+                wrap_list,
+                wrap_single,
+                *span,
+                value,
+            ),
             Self::Map {
                 keys,
                 values,
@@ -1212,6 +1252,7 @@ impl Serialize for Schema {
                 fields,
                 wrap_missing,
                 wrap_list,
+                wrap_single,
                 span,
             } => {
                 serialize_seq!(
@@ -1220,6 +1261,7 @@ impl Serialize for Schema {
                     fields,
                     wrap_missing,
                     wrap_list,
+                    wrap_single,
                     span
                 );
             }
@@ -1303,11 +1345,20 @@ impl<'de> Visitor<'de> for SchemaVisiter {
                 })
             }
             Schema::VAR_STRUCT => {
-                deserialize_seq!(seq, A::Error, fields, wrap_missing, wrap_list, span);
+                deserialize_seq!(
+                    seq,
+                    A::Error,
+                    fields,
+                    wrap_missing,
+                    wrap_list,
+                    wrap_single,
+                    span
+                );
                 Ok(Schema::Struct {
                     fields,
                     wrap_missing,
                     wrap_list,
+                    wrap_single,
                     span,
                 })
             }
@@ -1432,6 +1483,7 @@ mod test {
         fields: Vec<(&'static str, Schema)>,
         wrap_missing: bool,
         wrap_list: bool,
+        wrap_single: bool,
     ) -> Schema {
         Schema::Struct {
             fields: fields
@@ -1441,6 +1493,7 @@ mod test {
                 .into_spanned(Span::test_data()),
             wrap_missing: wrap_missing.into_spanned(Span::test_data()),
             wrap_list: wrap_list.into_spanned(Span::test_data()),
+            wrap_single: wrap_single.into_spanned(Span::test_data()),
             span: Span::test_data(),
         }
     }
@@ -1665,11 +1718,21 @@ mod test {
             vec![("x", schema_type(Type::Int)), ("y", schema_type(Type::Int))],
             false,
             false,
+            false,
         );
         let schema_open = schema_struct(
             vec![
                 ("x", schema_type(Type::Int)),
-                ("y", schema_type(Type::Int)),
+                (
+                    "y",
+                    schema_any(vec![
+                        schema_all(vec![
+                            schema_type(Type::Nothing),
+                            schema_fallback(Value::test_int(1)),
+                        ]),
+                        schema_type(Type::Int),
+                    ]),
+                ),
                 (
                     "z",
                     schema_any(vec![
@@ -1683,11 +1746,11 @@ mod test {
             ],
             true,
             true,
+            true,
         );
         let xy = Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_int(1)));
         let xy_list = Value::test_list(vec![Value::test_int(0), Value::test_int(1)]);
-        let xy_null =
-            Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_nothing()));
+        let x_null = Value::test_record(record!("x" => Value::test_nothing()));
         let xyz = Value::test_record(
             record!("x" => Value::test_int(0), "y" => Value::test_int(1), "z" => Value::test_int(0)),
         );
@@ -1697,7 +1760,7 @@ mod test {
         assert_schema(schema_strict.clone(), xy.clone(), None, "maching value")?;
         assert_schema(
             schema_strict.clone(),
-            xy_null.clone(),
+            x_null.clone(),
             Some(None),
             "wrong type",
         )?;
@@ -1716,15 +1779,21 @@ mod test {
         )?;
         assert_schema(
             schema_open.clone(),
-            xy_null,
+            x_null,
             Some(None),
             "missing required field",
         )?;
         assert_schema(
-            schema_open,
+            schema_open.clone(),
             xy_list,
-            Some(Some(xyz)),
+            Some(Some(xyz.clone())),
             "treat list as ordered fields",
+        )?;
+        assert_schema(
+            schema_open,
+            Value::test_int(0),
+            Some(Some(xyz)),
+            "treat single value as first field",
         )?;
         Ok(())
     }
@@ -1823,7 +1892,7 @@ mod test {
             ),
             "array",
         )?;
-        assert_conversion_roundtrip(schema_struct(vec![], true, false), "struct")?;
+        assert_conversion_roundtrip(schema_struct(vec![], true, false, false), "struct")?;
         assert_conversion_roundtrip(
             schema_map(
                 Some(schema_all(vec![])),

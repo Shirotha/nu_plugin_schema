@@ -13,6 +13,7 @@ impl StructCmd {
         input: &Value,
         wrap_missing: Spanned<bool>,
         wrap_list: Spanned<bool>,
+        wrap_single: Spanned<bool>,
     ) -> Result<Schema, LabeledError> {
         let fields = input.as_record()?;
         let fields = fields
@@ -24,6 +25,7 @@ impl StructCmd {
             fields,
             wrap_missing,
             wrap_list,
+            wrap_single,
             span: input.span(),
         })
     }
@@ -44,6 +46,7 @@ impl SimplePluginCommand for StructCmd {
             .input_output_type(Type::Record(vec![].into_boxed_slice()), Schema::r#type())
             .switch("wrap-missing", "treat missing fields as null", Some('m'))
             .switch("wrap-list", "treat list as ordered fields", Some('l'))
+            .switch("wrap-single", "treat list as ordered fields", Some('s'))
     }
     #[inline]
     fn examples(&self) -> Vec<nu_protocol::Example> {
@@ -87,6 +90,7 @@ impl SimplePluginCommand for StructCmd {
                     .into_spanned(Span::test_data()),
                     wrap_missing: true.into_spanned(Span::test_data()),
                     wrap_list: false.into_spanned(Span::test_data()),
+                    wrap_single: false.into_spanned(Span::test_data()),
                     span: Span::test_data(),
                 }
                 .into_value(Span::test_data()),
@@ -111,6 +115,7 @@ impl SimplePluginCommand for StructCmd {
                     .into_spanned(Span::test_data()),
                     wrap_missing: false.into_spanned(Span::test_data()),
                     wrap_list: true.into_spanned(Span::test_data()),
+                    wrap_single: false.into_spanned(Span::test_data()),
                     span: Span::test_data(),
                 }
                 .into_value(Span::test_data()),
@@ -129,6 +134,7 @@ impl SimplePluginCommand for StructCmd {
             input,
             get_switch_spanned(call, "wrap-missing")?,
             get_switch_spanned(call, "wrap-list")?,
+            get_switch_spanned(call, "wrap-single")?,
         )?
         .into_value(input.span()))
     }
