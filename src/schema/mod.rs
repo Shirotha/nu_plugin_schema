@@ -1,5 +1,5 @@
 mod value;
-use std::{cmp::Ordering, ops::Deref};
+use std::{cmp::Ordering, iter::repeat, ops::Deref};
 
 pub use value::*;
 mod array;
@@ -164,6 +164,8 @@ pub enum Schema {
         fields: Spanned<Box<[(String, Schema)]>>,
         /// Missing fields will be treated as `null`.
         wrap_missing: Spanned<bool>,
+        /// Allow wrapping lists into record in order of defined fields
+        wrap_list: Spanned<bool>,
         span: Span,
     },
     /// Describes a homegeneous record
@@ -415,6 +417,7 @@ impl CustomValue for Schema {
                 Self::Struct {
                     fields,
                     wrap_missing,
+                    wrap_list,
                     span: s,
                 } => {
                     let mut record = Record::new();
@@ -425,6 +428,7 @@ impl CustomValue for Schema {
                         "record" => Value::string("struct".to_string(), Span::unknown()),
                         "fields" => Value::record(record, fields.span),
                         "wrap_missing" => Value::bool(wrap_missing.item, wrap_missing.span),
+                        "wrap_list" => Value::bool(wrap_list.item, wrap_list.span)
                     )
                     .into_spanned(span_fallback(span, *s))
                 }
@@ -636,9 +640,11 @@ impl FromValue for Schema {
                                 .collect::<Result<Box<[_]>, ShellError>>()?
                                 .into_spanned(span);
                             let wrap_missing = to_bool(val.get("wrap_missing"), false)?;
+                            let wrap_list = to_bool(val.get("wrap_list"), false)?;
                             Ok(Self::Struct {
                                 fields,
                                 wrap_missing,
+                                wrap_list,
                                 span: internal_span,
                             })
                         }
@@ -887,45 +893,72 @@ impl Schema {
         engine: Option<&EngineInterface>,
         fields: &Spanned<Box<[(String, Schema)]>>,
         wrap_missing: &Spanned<bool>,
+        wrap_list: &Spanned<bool>,
         span: Span,
         value: Value,
     ) -> Result<Value, SchemaError> {
         let value_span = value.span();
-        let Ok(mut record) = value.into_record() else {
-            return Err(SchemaError::Value {
-                schema_span: span,
-                value_span,
-                msg: "non-record value".to_string(),
-            });
-        };
         let inner = fields.as_ref().item;
-        if record.len() > inner.len() {
-            return Err(SchemaError::Value {
-                schema_span: fields.span,
-                value_span,
-                msg: "too many fields".to_string(),
-            });
-        }
-        for (field, schema) in inner.iter() {
-            // TODO: do this without having to clone all values
-            let value = if let Some(value) = record.get(field) {
-                value.clone()
-            } else if wrap_missing.item {
-                Value::nothing(wrap_missing.span)
-            } else {
-                return Err(SchemaError::Value {
-                    schema_span: span_fallback(wrap_missing.span, span),
-                    value_span,
-                    msg: "missing fields not allowed".to_string(),
-                });
-            };
-            match schema.apply(engine, value) {
-                Ok(value) => {
-                    record.insert(field, value);
+        let record = match value {
+            Value::Record { val, .. } => {
+                if val.len() > inner.len() {
+                    return Err(SchemaError::Value {
+                        schema_span: fields.span,
+                        value_span,
+                        msg: "too many fields".to_string(),
+                    });
                 }
-                Err(error) => return Err(error),
+                let mut record = val.into_owned();
+                for (field, schema) in inner.iter() {
+                    // TODO: do this without having to clone all values
+                    let value = if let Some(value) = record.get(field) {
+                        value.clone()
+                    } else if wrap_missing.item {
+                        Value::nothing(wrap_missing.span)
+                    } else {
+                        return Err(SchemaError::Value {
+                            schema_span: span_fallback(wrap_missing.span, span),
+                            value_span,
+                            msg: "missing fields not allowed".to_string(),
+                        });
+                    };
+                    match schema.apply(engine, value) {
+                        Ok(value) => {
+                            record.insert(field, value);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+                record
             }
-        }
+            Value::List { vals, .. } if wrap_list.item => {
+                if vals.len() > inner.len() {
+                    return Err(SchemaError::Value {
+                        schema_span: fields.span,
+                        value_span,
+                        msg: "too many fields".to_string(),
+                    });
+                }
+                let mut record = Record::with_capacity(vals.len());
+                for ((field, schema), value) in inner.iter().zip(
+                    vals.into_iter()
+                        .chain(repeat(Value::nothing(Span::unknown()))),
+                ) {
+                    match schema.apply(engine, value) {
+                        Ok(value) => _ = record.insert(field, value),
+                        Err(error) => return Err(error),
+                    }
+                }
+                record
+            }
+            _ => {
+                return Err(SchemaError::Value {
+                    schema_span: span,
+                    value_span,
+                    msg: "non-record value".to_string(),
+                })
+            }
+        };
         Ok(Value::record(record, value_span))
     }
     #[inline]
@@ -1095,8 +1128,9 @@ impl Schema {
             Self::Struct {
                 fields,
                 wrap_missing,
+                wrap_list,
                 span,
-            } => Self::apply_struct(engine, fields, wrap_missing, *span, value),
+            } => Self::apply_struct(engine, fields, wrap_missing, wrap_list, *span, value),
             Self::Map {
                 keys,
                 values,
@@ -1177,9 +1211,17 @@ impl Serialize for Schema {
             Schema::Struct {
                 fields,
                 wrap_missing,
+                wrap_list,
                 span,
             } => {
-                serialize_seq!(seq, &Self::VAR_STRUCT, fields, wrap_missing, span);
+                serialize_seq!(
+                    seq,
+                    &Self::VAR_STRUCT,
+                    fields,
+                    wrap_missing,
+                    wrap_list,
+                    span
+                );
             }
             Schema::Map {
                 keys,
@@ -1261,10 +1303,11 @@ impl<'de> Visitor<'de> for SchemaVisiter {
                 })
             }
             Schema::VAR_STRUCT => {
-                deserialize_seq!(seq, A::Error, fields, wrap_missing, span);
+                deserialize_seq!(seq, A::Error, fields, wrap_missing, wrap_list, span);
                 Ok(Schema::Struct {
                     fields,
                     wrap_missing,
+                    wrap_list,
                     span,
                 })
             }
@@ -1385,7 +1428,11 @@ mod test {
             span: Span::test_data(),
         }
     }
-    fn schema_struct(fields: Vec<(&'static str, Schema)>, wrap_missing: bool) -> Schema {
+    fn schema_struct(
+        fields: Vec<(&'static str, Schema)>,
+        wrap_missing: bool,
+        wrap_list: bool,
+    ) -> Schema {
         Schema::Struct {
             fields: fields
                 .into_iter()
@@ -1393,6 +1440,7 @@ mod test {
                 .collect::<Box<[_]>>()
                 .into_spanned(Span::test_data()),
             wrap_missing: wrap_missing.into_spanned(Span::test_data()),
+            wrap_list: wrap_list.into_spanned(Span::test_data()),
             span: Span::test_data(),
         }
     }
@@ -1616,6 +1664,7 @@ mod test {
         let schema_strict = schema_struct(
             vec![("x", schema_type(Type::Int)), ("y", schema_type(Type::Int))],
             false,
+            false,
         );
         let schema_open = schema_struct(
             vec![
@@ -1633,8 +1682,10 @@ mod test {
                 ),
             ],
             true,
+            true,
         );
         let xy = Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_int(1)));
+        let xy_list = Value::test_list(vec![Value::test_int(0), Value::test_int(1)]);
         let xy_null =
             Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_nothing()));
         let xyz = Value::test_record(
@@ -1660,10 +1711,21 @@ mod test {
         assert_schema(
             schema_open.clone(),
             xyz_null,
-            Some(Some(xyz)),
+            Some(Some(xyz.clone())),
             "treat null like missing",
         )?;
-        assert_schema(schema_open, xy_null, Some(None), "missing required field")?;
+        assert_schema(
+            schema_open.clone(),
+            xy_null,
+            Some(None),
+            "missing required field",
+        )?;
+        assert_schema(
+            schema_open,
+            xy_list,
+            Some(Some(xyz)),
+            "treat list as ordered fields",
+        )?;
         Ok(())
     }
     #[test]
@@ -1761,7 +1823,7 @@ mod test {
             ),
             "array",
         )?;
-        assert_conversion_roundtrip(schema_struct(vec![], true), "struct")?;
+        assert_conversion_roundtrip(schema_struct(vec![], true, false), "struct")?;
         assert_conversion_roundtrip(
             schema_map(
                 Some(schema_all(vec![])),
