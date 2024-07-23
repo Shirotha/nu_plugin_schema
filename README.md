@@ -51,3 +51,10 @@ let tree = $input | normalize $node
 $tree.right # => 2
 $tree.left.left # => null
 ```
+
+## Examples
+To run the examples, first register the plugin in nushell
+```nu
+cargo build --release
+plugin add target/release/nu_plugin_schema
+```
