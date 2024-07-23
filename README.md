@@ -30,22 +30,24 @@ let point = [
 ```
 Nested schema can be defined using closures
 ```nu
-let leaf = [int nothing] | schema
-let branch = {
-    left: { normalize $node }
-    right: { normalize $node }
-} | schema tuple --wrap-missing
-let node = [
-    $leaf
-    $branch
-] | schema
+def tree [] {
+    let leaf = [int nothing] | schema
+    let branch = {
+        left: { normalize -r (tree) }
+        right: { normalize -r (tree) }
+    } | schema struct --wrap-missing
+    [
+        $leaf
+        $branch
+    ] | schema
+}
 let input = {
     left: {
         right: 1
     }
     right: 2
 }
-let tree = normalize $node
+let tree = $input | normalize $node
 $tree.right # => 2
 $tree.left.left # => null
 ```
