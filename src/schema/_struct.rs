@@ -37,7 +37,7 @@ impl SimplePluginCommand for StructCmd {
         "schema struct"
     }
     #[inline(always)]
-    fn usage(&self) -> &str {
+    fn description(&self) -> &str {
         "create a new schema for a struct (record)"
     }
     #[inline]

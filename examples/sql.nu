@@ -1,9 +1,8 @@
 plugin use schema
 
 def ident [] {
-    let name = $in
-    if name =~ '^(\[.*?\]|[A-Za-z][A-Za-z0-9_]*)$' {
-        {ok: $name}
+    if $in =~ '^(\[.*?\]|[A-Za-z][A-Za-z0-9_]*)$' {
+        {ok: $in}
     } else {
         {err: "invalid sql identifier"}
     }

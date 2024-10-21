@@ -12,7 +12,7 @@ impl SimplePluginCommand for NormalizeCmd {
         "normalize"
     }
     #[inline(always)]
-    fn usage(&self) -> &str {
+    fn description(&self) -> &str {
         "trys to normalize input using a schema or fail"
     }
     #[inline]

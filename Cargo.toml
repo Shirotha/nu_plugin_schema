@@ -41,11 +41,11 @@ debug = 2
 
 
 [dependencies]
-nu-plugin = "0.95.0"
-nu-protocol = "0.95.0"
+nu-plugin = "0.99.0"
+nu-protocol = "0.99.0"
 serde = "1.0.203"
 thiserror = "1.0.61"
 typetag = "0.2.16"
 
 [dev-dependencies]
-nu-plugin-test-support = "0.95.0"
+nu-plugin-test-support = "0.99.0"

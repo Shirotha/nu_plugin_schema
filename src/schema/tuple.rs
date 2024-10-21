@@ -36,7 +36,7 @@ impl SimplePluginCommand for TupleCmd {
         "schema tuple"
     }
     #[inline(always)]
-    fn usage(&self) -> &str {
+    fn description(&self) -> &str {
         "create a schema for a tuple (list)"
     }
     #[inline]

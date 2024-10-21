@@ -33,7 +33,7 @@ impl SimplePluginCommand for ArrayCmd {
         "schema array"
     }
     #[inline(always)]
-    fn usage(&self) -> &str {
+    fn description(&self) -> &str {
         "create a new schema for an array (list)"
     }
     #[inline]

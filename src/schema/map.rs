@@ -60,7 +60,7 @@ impl SimplePluginCommand for MapCmd {
         "schema map"
     }
     #[inline(always)]
-    fn usage(&self) -> &str {
+    fn description(&self) -> &str {
         "create a new schema for aa map (record)"
     }
     #[inline]

@@ -62,7 +62,7 @@ impl SimplePluginCommand for ValueCmd {
         "schema"
     }
     #[inline(always)]
-    fn usage(&self) -> &str {
+    fn description(&self) -> &str {
         "create a schema for a single value"
     }
     #[inline]
