@@ -127,7 +127,6 @@ impl SimplePluginCommand for TupleCmd {
         call: &nu_plugin::EvaluatedCall,
         input: &Value,
     ) -> Result<Value, LabeledError> {
-        eprintln!("call {:?}", call);
         Ok(Self::run_direct(
             input,
             get_switch_spanned(call, "wrap-single")?,

@@ -1,10 +1,10 @@
-mod value;
 use std::{
     cmp::Ordering,
     iter::{once, repeat},
     ops::Deref,
 };
 
+mod value;
 pub use value::*;
 mod array;
 pub use array::*;
@@ -121,6 +121,10 @@ pub fn type_from_typename(r#type: &str) -> Option<Type> {
         "range" => Some(Type::Range),
         "string" => Some(Type::String),
         "glob" => Some(Type::Glob),
+        "cell-path" => Some(Type::CellPath),
+        "closure" => Some(Type::Closure),
+        // NOTE: other custom types cannot be sent to this plugin, so only schema is possible
+        "schema" => Some(Schema::r#type()),
         _ => None,
     }
 }
@@ -370,7 +374,11 @@ impl CustomValue for Schema {
         let result =
             match self {
                 Self::Type(r#type) => {
-                    record!("type" => Value::string(r#type.item.to_string(), r#type.span))
+                    let typename = match &r#type.item {
+                        Type::Custom(subtype) if subtype.deref() == "Schema" => "schema".into(),
+                        other => other.get_non_specified_string(),
+                    };
+                    record!("type" => Value::string(typename, r#type.span))
                         .into_spanned(span_fallback(span, r#type.span))
                 }
                 Self::Value(value) => record!("value" => value.clone())
