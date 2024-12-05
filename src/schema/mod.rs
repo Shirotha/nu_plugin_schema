@@ -148,6 +148,8 @@ pub enum Schema {
     Tuple {
         /// Inner schema per element.
         items: Spanned<Box<[Schema]>>,
+        /// Missing elements will be treated as `null`.
+        wrap_missing: Spanned<bool>,
         /// Allow wrapping single non-list, non-null value into 1-length list.
         wrap_single: Spanned<bool>,
         /// Allow treating `null` as empty list.
@@ -176,6 +178,8 @@ pub enum Schema {
         wrap_list: Spanned<bool>,
         /// Allow wrapping non-record, non-list value into single field record.
         wrap_single: Spanned<bool>,
+        /// Allow treating `null` as empty record.
+        wrap_null: Spanned<bool>,
         span: Span,
     },
     /// Describes a homegeneous record
@@ -401,6 +405,7 @@ impl CustomValue for Schema {
                 .into_spanned(span_fallback(span, schemas.span)),
                 Self::Tuple {
                     items,
+                    wrap_missing,
                     wrap_single,
                     wrap_null,
                     span: s,
@@ -410,6 +415,7 @@ impl CustomValue for Schema {
                         .map(|s| s.to_base_value(Span::unknown()))
                         .collect::<Result<Vec<Value>, _>>()?
                         .into_value(items.span),
+                    "wrap_missing" => Value::bool(wrap_missing.item, wrap_missing.span),
                     "wrap_single" => Value::bool(wrap_single.item, wrap_single.span),
                     "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                 )
@@ -433,6 +439,7 @@ impl CustomValue for Schema {
                     wrap_missing,
                     wrap_list,
                     wrap_single,
+                    wrap_null,
                     span: s,
                 } => {
                     let mut record = Record::new();
@@ -444,7 +451,8 @@ impl CustomValue for Schema {
                         "fields" => Value::record(record, fields.span),
                         "wrap_missing" => Value::bool(wrap_missing.item, wrap_missing.span),
                         "wrap_list" => Value::bool(wrap_list.item, wrap_list.span),
-                        "wrap_single" => Value::bool(wrap_single.item, wrap_single.span)
+                        "wrap_single" => Value::bool(wrap_single.item, wrap_single.span),
+                        "wrap_null" => Value::bool(wrap_null.item, wrap_null.span),
                     )
                     .into_spanned(span_fallback(span, *s))
                 }
@@ -599,10 +607,12 @@ impl FromValue for Schema {
                                 },
                                 to_list,
                             )?;
+                            let wrap_missing = to_bool(val.get("wrap_missing"), false)?;
                             let wrap_single = to_bool(val.get("wrap_single"), false)?;
                             let wrap_null = to_bool(val.get("wrap_null"), false)?;
                             Ok(Self::Tuple {
                                 items,
+                                wrap_missing,
                                 wrap_single,
                                 wrap_null,
                                 span: internal_span,
@@ -658,11 +668,13 @@ impl FromValue for Schema {
                             let wrap_missing = to_bool(val.get("wrap_missing"), false)?;
                             let wrap_list = to_bool(val.get("wrap_list"), false)?;
                             let wrap_single = to_bool(val.get("wrap_single"), false)?;
+                            let wrap_null = to_bool(val.get("wrap_null"), false)?;
                             Ok(Self::Struct {
                                 fields,
                                 wrap_missing,
                                 wrap_list,
                                 wrap_single,
+                                wrap_null,
                                 span: internal_span,
                             })
                         }
@@ -788,6 +800,7 @@ impl Schema {
     pub fn apply_tuple(
         engine: Option<&EngineInterface>,
         items: &Spanned<Box<[Schema]>>,
+        wrap_missing: &Spanned<bool>,
         wrap_single: &Spanned<bool>,
         wrap_null: &Spanned<bool>,
         span: Span,
@@ -799,7 +812,8 @@ impl Schema {
                 vals,
                 internal_span,
             } => {
-                if vals.len() != inner.len() {
+                let diff = vals.len().checked_sub(inner.len());
+                if diff != Some(0) && !(wrap_missing.item && diff.is_none()) {
                     return Err(SchemaError::Value {
                         schema_span: items.span,
                         value_span: internal_span,
@@ -808,14 +822,31 @@ impl Schema {
                 }
                 inner
                     .iter()
-                    .zip(vals)
+                    .zip(
+                        vals.into_iter()
+                            .chain(repeat(Value::nothing(Span::unknown()))),
+                    )
                     .map(|(s, v)| s.apply(engine, v))
                     .collect::<Result<Vec<_>, _>>()
                     .map(|vals| Value::list(vals, internal_span))
             }
-            Value::Nothing { internal_span } if inner.len() == 0 => {
+            Value::Nothing { internal_span } if inner.len() == 0 || wrap_missing.item => {
                 if wrap_null.item {
-                    Ok(Value::list(Vec::new(), internal_span))
+                    if inner.is_empty() {
+                        Ok(Value::list(Vec::new(), internal_span))
+                    } else if wrap_missing.item {
+                        inner
+                            .iter()
+                            .map(|s| s.apply(engine, Value::nothing(Span::unknown())))
+                            .collect::<Result<Vec<_>, _>>()
+                            .map(|vals| Value::list(vals, internal_span))
+                    } else {
+                        Err(SchemaError::Value {
+                            schema_span: span_fallback(wrap_missing.span, span),
+                            value_span: internal_span,
+                            msg: "not enough elements".to_string(),
+                        })
+                    }
                 } else {
                     Err(SchemaError::Value {
                         schema_span: span_fallback(wrap_null.span, span),
@@ -824,12 +855,28 @@ impl Schema {
                     })
                 }
             }
-            value if inner.len() == 1 => {
+            value if inner.len() == 1 || wrap_missing.item => {
                 if wrap_single.item {
-                    inner[0].apply(engine, value).map(|value| {
+                    if inner.len() == 1 {
+                        inner[0].apply(engine, value).map(|value| {
+                            let span = value.span();
+                            Value::list(vec![value], span)
+                        })
+                    } else if wrap_missing.item && inner.len() != 0 {
                         let span = value.span();
-                        Value::list(vec![value], span)
-                    })
+                        inner
+                            .iter()
+                            .zip(once(value).chain(repeat(Value::nothing(Span::unknown()))))
+                            .map(|(s, v)| s.apply(engine, v))
+                            .collect::<Result<Vec<_>, _>>()
+                            .map(|vals| Value::list(vals, span))
+                    } else {
+                        Err(SchemaError::Value {
+                            schema_span: span_fallback(wrap_missing.span, span),
+                            value_span: value.span(),
+                            msg: "wrong number of elements".to_string(),
+                        })
+                    }
                 } else {
                     Err(SchemaError::Value {
                         schema_span: span_fallback(wrap_single.span, span),
@@ -906,6 +953,7 @@ impl Schema {
             }),
         }
     }
+    #[allow(clippy::too_many_arguments)]
     #[inline]
     pub fn apply_struct(
         engine: Option<&EngineInterface>,
@@ -913,6 +961,7 @@ impl Schema {
         wrap_missing: &Spanned<bool>,
         wrap_list: &Spanned<bool>,
         wrap_single: &Spanned<bool>,
+        wrap_null: &Spanned<bool>,
         span: Span,
         value: Value,
     ) -> Result<Value, SchemaError> {
@@ -964,6 +1013,16 @@ impl Schema {
                         .chain(repeat(Value::nothing(Span::unknown()))),
                 ) {
                     match schema.apply(engine, value) {
+                        Ok(value) => _ = record.insert(field, value),
+                        Err(error) => return Err(error),
+                    }
+                }
+                record
+            }
+            Value::Nothing { .. } if wrap_null.item => {
+                let mut record = Record::with_capacity(inner.len());
+                for (field, schema) in inner.iter() {
+                    match schema.apply(engine, Value::nothing(Span::unknown())) {
                         Ok(value) => _ = record.insert(field, value),
                         Err(error) => return Err(error),
                     }
@@ -1153,10 +1212,19 @@ impl Schema {
             Self::All(schemas) => Self::apply_all(engine, schemas, value),
             Self::Tuple {
                 items,
+                wrap_missing,
                 wrap_single,
                 wrap_null,
                 span,
-            } => Self::apply_tuple(engine, items, wrap_single, wrap_null, *span, value),
+            } => Self::apply_tuple(
+                engine,
+                items,
+                wrap_missing,
+                wrap_single,
+                wrap_null,
+                *span,
+                value,
+            ),
             Self::Array {
                 items,
                 length,
@@ -1169,6 +1237,7 @@ impl Schema {
                 wrap_missing,
                 wrap_list,
                 wrap_single,
+                wrap_null,
                 span,
             } => Self::apply_struct(
                 engine,
@@ -1176,6 +1245,7 @@ impl Schema {
                 wrap_missing,
                 wrap_list,
                 wrap_single,
+                wrap_null,
                 *span,
                 value,
             ),
@@ -1233,11 +1303,20 @@ impl Serialize for Schema {
             }
             Schema::Tuple {
                 items,
+                wrap_missing,
                 wrap_single,
                 wrap_null,
                 span,
             } => {
-                serialize_seq!(seq, &Self::VAR_TUPLE, items, wrap_single, wrap_null, span);
+                serialize_seq!(
+                    seq,
+                    &Self::VAR_TUPLE,
+                    items,
+                    wrap_missing,
+                    wrap_single,
+                    wrap_null,
+                    span
+                );
             }
             Schema::Array {
                 items,
@@ -1261,6 +1340,7 @@ impl Serialize for Schema {
                 wrap_missing,
                 wrap_list,
                 wrap_single,
+                wrap_null,
                 span,
             } => {
                 serialize_seq!(
@@ -1270,6 +1350,7 @@ impl Serialize for Schema {
                     wrap_missing,
                     wrap_list,
                     wrap_single,
+                    wrap_null,
                     span
                 );
             }
@@ -1334,9 +1415,18 @@ impl<'de> Visitor<'de> for SchemaVisiter {
                 Ok(Schema::All(options))
             }
             Schema::VAR_TUPLE => {
-                deserialize_seq!(seq, A::Error, items, wrap_single, wrap_null, span);
+                deserialize_seq!(
+                    seq,
+                    A::Error,
+                    items,
+                    wrap_missing,
+                    wrap_single,
+                    wrap_null,
+                    span
+                );
                 Ok(Schema::Tuple {
                     items,
+                    wrap_missing,
                     wrap_single,
                     wrap_null,
                     span,
@@ -1360,6 +1450,7 @@ impl<'de> Visitor<'de> for SchemaVisiter {
                     wrap_missing,
                     wrap_list,
                     wrap_single,
+                    wrap_null,
                     span
                 );
                 Ok(Schema::Struct {
@@ -1367,6 +1458,7 @@ impl<'de> Visitor<'de> for SchemaVisiter {
                     wrap_missing,
                     wrap_list,
                     wrap_single,
+                    wrap_null,
                     span,
                 })
             }
@@ -1463,9 +1555,15 @@ mod test {
     fn schema_all(options: Vec<Schema>) -> Schema {
         Schema::All(options.into_boxed_slice().into_spanned(Span::test_data()))
     }
-    fn schema_tuple(elements: Vec<Schema>, wrap_single: bool, wrap_null: bool) -> Schema {
+    fn schema_tuple(
+        elements: Vec<Schema>,
+        wrap_missing: bool,
+        wrap_single: bool,
+        wrap_null: bool,
+    ) -> Schema {
         Schema::Tuple {
             items: elements.into_boxed_slice().into_spanned(Span::test_data()),
+            wrap_missing: wrap_missing.into_spanned(Span::test_data()),
             wrap_single: wrap_single.into_spanned(Span::test_data()),
             wrap_null: wrap_null.into_spanned(Span::test_data()),
             span: Span::test_data(),
@@ -1492,6 +1590,7 @@ mod test {
         wrap_missing: bool,
         wrap_list: bool,
         wrap_single: bool,
+        wrap_null: bool,
     ) -> Schema {
         Schema::Struct {
             fields: fields
@@ -1502,6 +1601,7 @@ mod test {
             wrap_missing: wrap_missing.into_spanned(Span::test_data()),
             wrap_list: wrap_list.into_spanned(Span::test_data()),
             wrap_single: wrap_single.into_spanned(Span::test_data()),
+            wrap_null: wrap_null.into_spanned(Span::test_data()),
             span: Span::test_data(),
         }
     }
@@ -1633,9 +1733,19 @@ mod test {
             vec![schema_type(Type::Int), schema_type(Type::Int)],
             false,
             false,
+            false,
         );
-        let schema_single = schema_tuple(vec![schema_value(Value::test_int(0))], true, true);
-        let schema_empty = schema_tuple(vec![], true, true);
+        let schema_single = schema_tuple(vec![schema_value(Value::test_int(0))], false, true, true);
+        let schema_empty = schema_tuple(vec![], false, true, true);
+        let schema_optional = schema_tuple(
+            vec![schema_any(vec![
+                schema_type(Type::Int),
+                schema_type(Type::Nothing),
+            ])],
+            true,
+            false,
+            true,
+        );
         assert_schema(
             schema_basic.clone(),
             Value::test_list(vec![Value::test_int(0), Value::test_int(1)]),
@@ -1677,6 +1787,12 @@ mod test {
             Value::test_nothing(),
             Some(Some(Value::test_list(vec![]))),
             "wrap null",
+        )?;
+        assert_schema(
+            schema_optional,
+            Value::test_nothing(),
+            Some(Some(Value::test_list(vec![Value::test_nothing()]))),
+            "fill missing",
         )?;
         Ok(())
     }
@@ -1727,6 +1843,7 @@ mod test {
             false,
             false,
             false,
+            false,
         );
         let schema_open = schema_struct(
             vec![
@@ -1755,7 +1872,9 @@ mod test {
             true,
             true,
             true,
+            false,
         );
+        let schema_empty = schema_struct(vec![], false, false, false, true);
         let xy = Value::test_record(record!("x" => Value::test_int(0), "y" => Value::test_int(1)));
         let xy_list = Value::test_list(vec![Value::test_int(0), Value::test_int(1)]);
         let x_null = Value::test_record(record!("x" => Value::test_nothing()));
@@ -1765,6 +1884,7 @@ mod test {
         let xyz_null = Value::test_record(
             record!("x" => Value::test_int(0), "y" => Value::test_int(1), "z" => Value::test_nothing()),
         );
+        let empty = Value::test_record(record!());
         assert_schema(schema_strict.clone(), xy.clone(), None, "maching value")?;
         assert_schema(
             schema_strict.clone(),
@@ -1802,6 +1922,12 @@ mod test {
             Value::test_int(0),
             Some(Some(xyz)),
             "treat single value as first field",
+        )?;
+        assert_schema(
+            schema_empty,
+            Value::test_nothing(),
+            Some(Some(empty)),
+            "treat null as empty record",
         )?;
         Ok(())
     }
@@ -1890,7 +2016,7 @@ mod test {
         assert_conversion_roundtrip(schema_fallback(Value::test_nothing()), "fallback")?;
         assert_conversion_roundtrip(schema_any(vec![]), "any")?;
         assert_conversion_roundtrip(schema_all(vec![]), "all")?;
-        assert_conversion_roundtrip(schema_tuple(vec![], true, true), "tuple")?;
+        assert_conversion_roundtrip(schema_tuple(vec![], true, true, true), "tuple")?;
         assert_conversion_roundtrip(
             schema_array(
                 schema_type(Type::Int),
@@ -1900,7 +2026,7 @@ mod test {
             ),
             "array",
         )?;
-        assert_conversion_roundtrip(schema_struct(vec![], true, false, false), "struct")?;
+        assert_conversion_roundtrip(schema_struct(vec![], true, false, false, false), "struct")?;
         assert_conversion_roundtrip(
             schema_map(
                 Some(schema_all(vec![])),

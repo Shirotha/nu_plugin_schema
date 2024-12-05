@@ -14,6 +14,7 @@ impl StructCmd {
         wrap_missing: Spanned<bool>,
         wrap_list: Spanned<bool>,
         wrap_single: Spanned<bool>,
+        wrap_null: Spanned<bool>,
     ) -> Result<Schema, LabeledError> {
         let fields = input.as_record()?;
         let fields = fields
@@ -26,6 +27,7 @@ impl StructCmd {
             wrap_missing,
             wrap_list,
             wrap_single,
+            wrap_null,
             span: input.span(),
         })
     }
@@ -47,6 +49,7 @@ impl SimplePluginCommand for StructCmd {
             .switch("wrap-missing", "treat missing fields as null", Some('m'))
             .switch("wrap-list", "treat list as ordered fields", Some('l'))
             .switch("wrap-single", "treat list as ordered fields", Some('s'))
+            .switch("wrap-null", "treat null as empty record", Some('n'))
     }
     #[inline]
     fn examples(&self) -> Vec<nu_protocol::Example> {
@@ -91,6 +94,7 @@ impl SimplePluginCommand for StructCmd {
                     wrap_missing: true.into_spanned(Span::test_data()),
                     wrap_list: false.into_spanned(Span::test_data()),
                     wrap_single: false.into_spanned(Span::test_data()),
+                    wrap_null: false.into_spanned(Span::test_data()),
                     span: Span::test_data(),
                 }
                 .into_value(Span::test_data()),
@@ -116,6 +120,7 @@ impl SimplePluginCommand for StructCmd {
                     wrap_missing: false.into_spanned(Span::test_data()),
                     wrap_list: true.into_spanned(Span::test_data()),
                     wrap_single: false.into_spanned(Span::test_data()),
+                    wrap_null: false.into_spanned(Span::test_data()),
                     span: Span::test_data(),
                 }
                 .into_value(Span::test_data()),
@@ -135,6 +140,7 @@ impl SimplePluginCommand for StructCmd {
             get_switch_spanned(call, "wrap-missing")?,
             get_switch_spanned(call, "wrap-list")?,
             get_switch_spanned(call, "wrap-single")?,
+            get_switch_spanned(call, "wrap-null")?,
         )?
         .into_value(input.span()))
     }

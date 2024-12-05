@@ -11,6 +11,7 @@ impl TupleCmd {
     #[inline]
     pub fn run_direct(
         input: &Value,
+        wrap_missing: Spanned<bool>,
         wrap_single: Spanned<bool>,
         wrap_null: Spanned<bool>,
     ) -> Result<Schema, LabeledError> {
@@ -23,6 +24,7 @@ impl TupleCmd {
         };
         Ok(Schema::Tuple {
             items: items.into_spanned(input.span()),
+            wrap_missing,
             wrap_single,
             wrap_null,
             span: input.span(),
@@ -48,6 +50,11 @@ impl SimplePluginCommand for TupleCmd {
                 (Type::Any, out),
             ])
             .switch(
+                "wrap-missing",
+                "fill shorter list will null values",
+                Some('m'),
+            )
+            .switch(
                 "wrap-single",
                 "treat non-list, non-null values as 1-tuples",
                 Some('s'),
@@ -68,6 +75,7 @@ impl SimplePluginCommand for TupleCmd {
                         ]
                         .into_boxed_slice()
                         .into_spanned(Span::test_data()),
+                        wrap_missing: false.into_spanned(Span::test_data()),
                         wrap_single: false.into_spanned(Span::test_data()),
                         wrap_null: false.into_spanned(Span::test_data()),
                         span: Span::test_data(),
@@ -97,6 +105,7 @@ impl SimplePluginCommand for TupleCmd {
                         )]
                         .into_boxed_slice()
                         .into_spanned(Span::test_data()),
+                        wrap_missing: false.into_spanned(Span::test_data()),
                         wrap_single: true.into_spanned(Span::test_data()),
                         wrap_null: false.into_spanned(Span::test_data()),
                         span: Span::test_data(),
@@ -110,6 +119,7 @@ impl SimplePluginCommand for TupleCmd {
                 result: Some(
                     Schema::Tuple {
                         items: vec![].into_boxed_slice().into_spanned(Span::test_data()),
+                        wrap_missing: false.into_spanned(Span::test_data()),
                         wrap_single: false.into_spanned(Span::test_data()),
                         wrap_null: true.into_spanned(Span::test_data()),
                         span: Span::test_data(),
@@ -129,6 +139,7 @@ impl SimplePluginCommand for TupleCmd {
     ) -> Result<Value, LabeledError> {
         Ok(Self::run_direct(
             input,
+            get_switch_spanned(call, "wrap-missing")?,
             get_switch_spanned(call, "wrap-single")?,
             get_switch_spanned(call, "wrap-null")?,
         )?
